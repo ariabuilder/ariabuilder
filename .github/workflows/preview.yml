@@ -81,6 +81,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PREVIEW_COMMIT: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail

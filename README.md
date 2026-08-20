@@ -37,7 +37,12 @@ Aria works directly with your .astro files. There is no project conversion, prop
 Aria is currently pre-v1 and builds are unsigned.
 
 
-Unsigned preview downloads will be added after the first successful public build.
+| Platform            | Download                                                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS Apple Silicon | [Download `.dmg`](https://github.com/ariabuilder/ariabuilder/releases/download/preview/Aria-macOS-arm64-unsigned.dmg)                      |
+| macOS Intel         | [Download `.dmg`](https://github.com/ariabuilder/ariabuilder/releases/download/preview/Aria-macOS-x64-unsigned.dmg)                          |
+| Windows x64         | [Download `.exe` installer](https://github.com/ariabuilder/ariabuilder/releases/download/preview/Aria-Windows-x64-unsigned.exe)              |
+| Linux x64           | [Download `.AppImage`](https://github.com/ariabuilder/ariabuilder/releases/download/preview/Aria-Linux-x64-unsigned.AppImage)                |
 
 
 Unsigned builds may trigger security warnings on macOS and Windows.
