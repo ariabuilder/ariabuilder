@@ -1,0 +1,12 @@
+---
+const items = [{ label: 'One' }, { label: 'Two' }];
+const show = true;
+const mode = 'a';
+---
+<ul>
+  {items.map((item) => (
+    <li>{item.label}</li>
+  ))}
+</ul>
+{show && <p class="banner">Visible</p>}
+{mode === 'a' ? <span>A</span> : <span>B</span>}

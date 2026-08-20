@@ -1,0 +1,106 @@
+name: Publish unsigned preview
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: unsigned-preview
+  cancel-in-progress: true
+
+jobs:
+  publish-preview:
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download macOS Apple Silicon build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: aria-macos-arm64-unsigned-ci
+          path: candidates/macos-arm64
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Download macOS Intel build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: aria-macos-x64-unsigned-ci
+          path: candidates/macos-x64
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Download Windows build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: aria-windows-x64-unsigned-ci
+          path: candidates/windows-x64
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Download Linux build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: aria-linux-x64-unsigned-ci
+          path: candidates/linux-x64
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Assemble fixed-name preview downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          copy_one() {
+            local destination="$1"
+            shift
+            local candidates=("$@")
+            if [[ "${#candidates[@]}" -ne 1 ]]; then
+              echo "Expected one source for ${destination}, found ${#candidates[@]}."
+              exit 1
+            fi
+            cp -- "${candidates[0]}" "preview-assets/${destination}"
+          }
+
+          mkdir -p preview-assets
+          copy_one Aria-macOS-arm64-unsigned.dmg candidates/macos-arm64/*.dmg
+          copy_one Aria-macOS-x64-unsigned.dmg candidates/macos-x64/*.dmg
+          copy_one Aria-Windows-x64-unsigned.exe candidates/windows-x64/*.exe
+          copy_one Aria-Linux-x64-unsigned.AppImage candidates/linux-x64/*.AppImage
+
+      - name: Publish rolling preview release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_COMMIT: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          release_notes="Unsigned preview built from ${PREVIEW_COMMIT}. These builds are for testing and may trigger operating-system security warnings."
+
+          if gh release view preview >/dev/null 2>&1; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/preview" \
+              -f sha="${PREVIEW_COMMIT}" \
+              -F force=true
+            gh release upload preview preview-assets/* --clobber
+            gh release edit preview \
+              --title "Aria unsigned preview" \
+              --notes "${release_notes}" \
+              --prerelease
+          else
+            gh release create preview \
+              --target "${PREVIEW_COMMIT}" \
+              --title "Aria unsigned preview" \
+              --notes "${release_notes}" \
+              --prerelease \
+              preview-assets/*
+          fi

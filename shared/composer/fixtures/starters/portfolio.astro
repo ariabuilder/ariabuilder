@@ -1,0 +1,31 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { Image } from 'astro:assets';
+import heroImage from '../assets/hero.jpg';
+
+const projects = [
+  { name: 'Nebula', blurb: 'Design system for orbital ops' },
+  { name: 'Lumen', blurb: 'Marketing sites that ship' },
+];
+---
+<Layout title="Portfolio">
+  <header class="relative isolate overflow-hidden">
+    <img src="/hero.jpg" alt="" class="absolute inset-0 -z-10 size-full object-cover" />
+    <div class="mx-auto max-w-5xl px-6 py-28 text-white">
+      <p class="text-sm uppercase tracking-[0.2em]">Studio</p>
+      <h1 class="mt-4 max-w-xl text-5xl font-semibold tracking-tight">Work that feels intentional</h1>
+      <p class="mt-4 max-w-lg text-lg text-white/80">Selected projects across product and brand.</p>
+    </div>
+  </header>
+  <section class="mx-auto max-w-5xl px-6 py-20">
+    <h2 class="text-2xl font-semibold">Projects</h2>
+    <div class="mt-8 grid gap-8 md:grid-cols-2">
+      {projects.map((project) => (
+        <article class="border-t border-black/10 pt-6">
+          <h3 class="text-xl font-medium">{project.name}</h3>
+          <p class="mt-2 text-black/70">{project.blurb}</p>
+        </article>
+      ))}
+    </div>
+  </section>
+</Layout>

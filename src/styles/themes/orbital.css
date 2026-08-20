@@ -1,0 +1,174 @@
+:root {
+  --orbital-light-bg: oklch(0.99 0.0005 195);
+  --orbital-light-sidebar: oklch(0.93 0.003 312);
+  --orbital-light-panel: oklch(0.94 0.004 312);
+  --orbital-light-text: oklch(0.25 0.003 312);
+  --orbital-light-muted: oklch(0.45 0.01 312);
+  --orbital-light-border: oklch(0.80 0.01 312);
+  --orbital-light-input: oklch(0.97 0.002 312);
+  --orbital-border-subtle-light: oklch(0.82 0.01 312 / 0.65);
+
+  --orbital-sidebar: oklch(0.25 0.01 308.04);
+  --orbital-background: oklch(0.14 0 308.45);
+  --orbital-black: #101319;
+  --orbital-gray-700: oklch(0.22 0.001 195);
+  --orbital-gray-600: #23262d;
+  --orbital-gray-500: #343841;
+  --orbital-gray-400: #545864;
+  --orbital-gray-300: oklch(0.6 0.0025 312);
+  --orbital-gray-200: #bfc1c9;
+  --orbital-gray-100: oklch(0.87 0.0232 308.17);
+  --orbital-blue: #3245ff;
+  --orbital-green: #4af2c8;
+  --orbital-purple: #ae4cdc;
+  --orbital-purple-light: #e8ccf4;
+  --orbital-red: #d83333;
+  --orbital-orange: #f8e42e;
+  --orbital-yellow: #ff7d54;
+  --orbital-border-subtle: oklch(0.20 0.002 312 / 0.55);
+
+  /* Semantic aliases used by the theme layer */
+  --orbital-bg: var(--orbital-background);
+  --orbital-editor-bg: var(--orbital-sidebar);
+  --orbital-panel-bg: var(--orbital-gray-700);
+  --orbital-divider: var(--orbital-gray-400);
+  --orbital-button-text: var(--orbital-gray-300);
+  --orbital-text: var(--orbital-gray-100);
+  --orbital-accent: oklch(0.2 0.0015 312);
+  --orbital-highlights: var(--orbital-green);
+  --orbital-warning: var(--orbital-red);
+  --orbital-highlight-modified: var(--orbital-green);
+  --orbital-constants: var(--orbital-purple);
+  --orbital-classes: var(--orbital-purple-light);
+  --orbital-operators: var(--orbital-yellow);
+  --orbital-codeblock: var(--orbital-gray-600);
+  --orbital-variables: var(--orbital-gray-200);
+  --orbital-border: oklch(0.34 0.002 312);
+  --orbital-input: oklch(0.18 0.0012 312);
+  --orbital-border-hover: #858b9866;
+  --orbital-surface-overlay: #23262d80;
+}
+
+/* Orbital dark */
+:root.theme-orbital.dark,
+:root[data-theme="orbital"].dark {
+  color-scheme: dark;
+
+  --background: var(--orbital-editor-bg);
+  --foreground: var(--orbital-text);
+  --card: var(--orbital-panel-bg);
+  --card-foreground: var(--orbital-text);
+  --popover: var(--orbital-panel-bg);
+  --popover-foreground: var(--orbital-text);
+  --primary: var(--orbital-purple);
+  --preloader-fill: var(--primary);
+  --primary-foreground: var(--orbital-purple-light);
+  --secondary: var(--orbital-gray-500);
+  --secondary-foreground: var(--orbital-text);
+  --muted: var(--orbital-gray-700);
+  --muted-foreground: var(--orbital-button-text);
+  --accent: var(--orbital-accent);
+  --accent-foreground: var(--orbital-text);
+  --destructive: var(--orbital-warning);
+  --border: var(--orbital-border);
+  --input: var(--orbital-input);
+  --ring: var(--orbital-border-subtle);
+
+  --sidebar: var(--orbital-bg);
+  --sidebar-foreground: var(--orbital-text);
+  --sidebar-primary: var(--orbital-accent);
+  --sidebar-primary-foreground: var(--orbital-text);
+  --sidebar-accent: var(--orbital-gray-600);
+  --sidebar-accent-foreground: var(--orbital-text);
+  --sidebar-border: var(--orbital-border-subtle);
+  --sidebar-ring: var(--orbital-divider);
+
+  --color-bg: var(--orbital-editor-bg);
+  --color-surface: var(--orbital-panel-bg);
+  --color-border: var(--orbital-border);
+  --color-border-hover: var(--orbital-border-hover);
+  --color-hover: var(--orbital-surface-overlay);
+  --color-text: var(--orbital-text);
+  --color-text-secondary: var(--orbital-variables);
+  --color-text-tertiary: var(--orbital-button-text);
+  --color-accent: var(--orbital-accent);
+
+  --flickering-grid-color: var(--orbital-gray-400);
+  --flickering-grid-accent: var(--orbital-purple);
+
+  /* CodeMirror — soft Orbital accents, no low-contrast blues */
+  --cm-foreground: var(--orbital-gray-100);
+  --cm-comment: var(--orbital-gray-400);
+  --cm-keyword: #b4c0de;
+  --cm-string: #d4b0aa;
+  --cm-number: #dcc48a;
+  --cm-function: var(--orbital-purple-light);
+  --cm-property: var(--orbital-gray-200);
+  --cm-atom: var(--orbital-green);
+  --cm-punctuation: var(--orbital-gray-300);
+  --cm-operator: var(--orbital-operators);
+  --cm-tag: #a8b8d8;
+  --cm-invalid: var(--orbital-red);
+}
+
+/* Orbital light */
+:root.theme-orbital:not(.dark),
+:root[data-theme="orbital"]:not(.dark) {
+  color-scheme: light;
+
+  --background: var(--orbital-light-bg);
+  --foreground: var(--orbital-light-text);
+  --card: var(--orbital-light-panel);
+  --card-foreground: var(--orbital-light-text);
+  --popover: var(--orbital-light-panel);
+  --popover-foreground: var(--orbital-light-text);
+  --primary: var(--orbital-purple);
+  --preloader-fill: var(--primary);
+  --primary-foreground: oklch(0.98 0.02 312);
+  --secondary: oklch(0.92 0.006 312);
+  --secondary-foreground: var(--orbital-light-text);
+  --muted: oklch(0.94 0.004 312);
+  --muted-foreground: var(--orbital-light-muted);
+  --accent: oklch(0.93 0.02 312);
+  --accent-foreground: var(--orbital-light-text);
+  --destructive: var(--orbital-red);
+  --border: var(--orbital-light-border);
+  --input: var(--orbital-light-input);
+  --ring: var(--orbital-border-subtle-light);
+
+  --sidebar: var(--orbital-light-sidebar);
+  --sidebar-foreground: var(--orbital-light-text);
+  --sidebar-primary: var(--orbital-purple);
+  --sidebar-primary-foreground: oklch(0.98 0.02 312);
+  --sidebar-accent: oklch(0.92 0.015 312);
+  --sidebar-accent-foreground: var(--orbital-light-text);
+  --sidebar-border: var(--orbital-border-subtle-light);
+  --sidebar-ring: var(--orbital-light-border);
+
+  --color-bg: var(--orbital-light-sidebar);
+  --color-surface: var(--orbital-light-panel);
+  --color-border: var(--orbital-light-border);
+  --color-border-hover: oklch(0.75 0.012 312 / 0.45);
+  --color-hover: oklch(0.9 0.01 312 / 0.5);
+  --color-text: var(--orbital-light-text);
+  --color-text-secondary: var(--orbital-light-muted);
+  --color-text-tertiary: oklch(0.62 0.012 312);
+  --color-accent: var(--orbital-purple);
+
+  --flickering-grid-color: var(--orbital-light-muted);
+  --flickering-grid-accent: var(--orbital-purple);
+
+  /* CodeMirror — same roles, inked for light surfaces */
+  --cm-foreground: var(--orbital-light-text);
+  --cm-comment: var(--orbital-light-muted);
+  --cm-keyword: #4a5a8c;
+  --cm-string: #8a4a48;
+  --cm-number: #8a6a28;
+  --cm-function: #7a3aa8;
+  --cm-property: #3a3e4a;
+  --cm-atom: #1a8a78;
+  --cm-punctuation: #6a6e7a;
+  --cm-operator: #8a6a18;
+  --cm-tag: #3a5a9a;
+  --cm-invalid: var(--orbital-red);
+}

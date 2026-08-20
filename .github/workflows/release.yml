@@ -1,0 +1,219 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-release:
+    if: ${{ vars.ARIA_RELEASE_SIGNING_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Install locked Astro smoke fixture
+        working-directory: tests/fixtures/astro-smoke
+        run: npm ci --ignore-scripts
+
+      - name: Match the tag to package.json
+        run: node -e "const p = require('./package.json'); if (process.env.GITHUB_REF_NAME !== 'v' + p.version) throw new Error('Tag must match package.json version')"
+
+      - name: Unit and runtime checks
+        run: npm run test:fast
+
+      - name: Real Astro runtime smoke
+        run: npm run smoke:real-astro
+        env:
+          ARIA_SMOKE_ASTRO_PROJECT: ${{ github.workspace }}/tests/fixtures/astro-smoke
+
+  build-macos:
+    needs: validate-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            arch: arm64
+          - runner: macos-26-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Build signed and notarized macOS update
+        run: npm run dist:mac:${{ matrix.arch }}
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Verify signing and notarization
+        run: npm run verify:release-signing
+        env:
+          ARIA_RELEASE_SIGNING: "1"
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-macos-${{ matrix.arch }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    needs: validate-release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Build signed Windows update
+        run: npm run dist:win
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      - name: Verify signing
+        run: npm run verify:release-signing
+        env:
+          ARIA_RELEASE_SIGNING: "1"
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-windows-x64
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  build-linux:
+    needs: validate-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build Linux update
+        run: npm run dist:linux
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-linux-x64
+          path: |
+            release/*.AppImage
+            release/*.blockmap
+            release/latest-linux.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-macos-arm64
+          path: candidates/macos-arm64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-macos-x64
+          path: candidates/macos-x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-windows-x64
+          path: candidates/windows-x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-linux-x64
+          path: candidates/linux-x64
+
+      - name: Assemble complete update feed
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          find candidates -type f ! -name latest-mac.yml -exec cp -f {} release-assets/ \;
+          node scripts/merge-update-metadata.mjs \
+            release-assets/latest-mac.yml \
+            candidates/macos-arm64/latest-mac.yml \
+            candidates/macos-x64/latest-mac.yml
+          test -f release-assets/latest.yml
+          test -f release-assets/latest-mac.yml
+          test -f release-assets/latest-linux.yml
+
+      - name: Upload and publish the complete release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_STATE="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [[ -z "$RELEASE_STATE" ]]; then
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --verify-tag \
+              --generate-notes \
+              --title "Aria ${GITHUB_REF_NAME#v}" \
+              release-assets/*
+          elif [[ "$RELEASE_STATE" == "true" ]]; then
+            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          else
+            echo "Release $GITHUB_REF_NAME is already published; refusing to replace it."
+            exit 1
+          fi
+          gh release edit "$GITHUB_REF_NAME" --draft=false

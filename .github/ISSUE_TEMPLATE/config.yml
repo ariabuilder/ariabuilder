@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/ariabuilder/ariabuilder/security/policy
+    about: Use a private reporting channel. Do not disclose vulnerabilities in a public issue.
+  - name: Ask for help
+    url: https://discord.gg/QvuG5XZPe
+    about: Use Discord for setup help and non-sensitive questions.

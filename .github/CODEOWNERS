@@ -1,0 +1,20 @@
+# Default review routing
+* @andycamara
+
+# Repository policy, automation, and legal surfaces
+/.github/ @andycamara
+/LICENSE @andycamara
+/NOTICE @andycamara
+/THIRD_PARTY_NOTICES.txt @andycamara
+/SECURITY.md @andycamara
+/TRADEMARKS.md @andycamara
+/package.json @andycamara
+/package-lock.json @andycamara
+
+# Privileged runtime and release tooling
+/electron/ @andycamara
+/scripts/ @andycamara
+/build/ @andycamara
+
+# Maintained architecture ledgers
+/docs/architecture/ @andycamara

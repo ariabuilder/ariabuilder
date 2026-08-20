@@ -1,0 +1,154 @@
+/* Signal palette */
+:root {
+  /* Light */
+  --signal-light-canvas: oklch(98.75% 0 0);
+  --signal-light-elevated: oklch(98% 0 0);
+  --signal-light-recessed: oklch(90% 0 0);
+  --signal-light-base: oklch(0.90 0 0);
+  --signal-light-text-default: oklch(20.5% 0 0);
+  --signal-light-text-subtle: oklch(30% 0 0);
+  --signal-light-hairline: oklch(80% 0 0);
+  --signal-light-fill: oklch(92.2% 0 0);
+  --signal-light-fill-hover: oklch(96.5% 0 0);
+  --signal-light-control: #fff;
+  --signal-light-danger: oklch(63.7% 0.237 25.331);
+  --signal-light-link: oklch(42.4% 0.199 265.638);
+
+  /* Dark */
+  --signal-dark-canvas: oklch(0.25 0.0016 17.3);
+  --signal-dark-elevated: oklch(0.2098 0.0025 67.69);
+  --signal-dark-recessed: oklch(0.16 0.0016 17.3);
+  --signal-dark-base: oklch(17% 0 0);
+  --signal-dark-text-default: oklch(0.9248 0.0158 42.38);
+  --signal-dark-text-subtle: oklch(0.8548 0.0158 42.33);
+  --signal-dark-hairline: oklch(0.30 0.0016 17.3);
+  --signal-dark-fill: oklch(26.9% 0 0);
+  --signal-dark-fill-hover: oklch(37.1% 0 0);
+  --signal-dark-control: oklch(0.124 0.0016 17.3);
+  --signal-dark-danger: oklch(39.6% 0.141 25.723);
+  --signal-dark-link: oklch(70.7% 0.165 254.624);
+
+  /* Brand */
+  --signal-brand: oklch(0.687 0.2074 38.66);
+  --signal-brand-hover: #ff7038;
+  --signal-brand-text: #f6821f;
+  --signal-on-brand: oklch(0.9248 0.0158 42.38);
+}
+
+/* Signal dark */
+:root.theme-signal.dark,
+:root[data-theme="signal"].dark {
+  color-scheme: dark;
+
+  --app-bg: var(--signal-dark-canvas);
+  --panel-bg: var(--signal-dark-elevated);
+  --canvas-bg: var(--signal-dark-canvas);
+
+  --background: var(--signal-dark-canvas);
+  --foreground: var(--signal-dark-text-default);
+  --card: var(--signal-dark-base);
+  --card-foreground: var(--signal-dark-text-default);
+  --popover: var(--signal-dark-elevated);
+  --popover-foreground: var(--signal-dark-text-default);
+  --primary: var(--signal-brand);
+  --preloader-fill: var(--primary);
+  --primary-foreground: var(--signal-dark-text-default);
+  --secondary: var(--signal-dark-fill);
+  --secondary-foreground: var(--signal-dark-text-default);
+  --muted: var(--signal-dark-fill);
+  --muted-foreground: var(--signal-dark-text-subtle);
+  --accent: var(--signal-dark-fill-hover);
+  --accent-foreground: var(--signal-dark-text-default);
+  --destructive: var(--signal-dark-danger);
+  --destructive-foreground: var(--signal-dark-text-default);
+  --border: var(--signal-dark-hairline);
+  --input: var(--signal-dark-control);
+  --ring: var(--signal-dark-hairline);
+
+  --sidebar: var(--signal-dark-recessed);
+  --sidebar-foreground: var(--signal-dark-text-default);
+  --sidebar-primary: var(--signal-brand);
+  --sidebar-primary-foreground: var(--signal-on-brand);
+  --sidebar-accent: var(--signal-dark-fill);
+  --sidebar-accent-foreground: var(--signal-dark-text-default);
+  --sidebar-border: var(--signal-dark-hairline);
+  --sidebar-ring: var(--signal-dark-fill-hover);
+
+  --chart-1: var(--signal-brand);
+  --chart-2: var(--signal-dark-link);
+  --chart-3: oklch(87.1% 0.15 154.449);
+  --chart-4: oklch(81.5% 0.197 76);
+  --chart-5: var(--signal-dark-text-subtle);
+
+  --color-bg: var(--signal-dark-recessed);
+  --color-surface: var(--signal-dark-elevated);
+  --color-border: var(--signal-dark-hairline);
+  --color-border-hover: var(--signal-dark-fill-hover);
+  --color-hover: oklch(26.9% 0 0 / 0.5);
+  --color-text: var(--signal-dark-text-default);
+  --color-text-secondary: var(--signal-dark-text-subtle);
+  --color-text-tertiary: oklch(55.6% 0 0);
+  --color-accent: var(--signal-brand);
+
+  --flickering-grid-color: var(--signal-dark-text-subtle);
+  --flickering-grid-accent: var(--signal-brand);
+}
+
+/* Signal light */
+:root.theme-signal:not(.dark),
+:root[data-theme="signal"]:not(.dark) {
+  color-scheme: light;
+
+  --app-bg: var(--signal-light-canvas);
+  --panel-bg: var(--signal-light-elevated);
+  --canvas-bg: var(--signal-light-canvas);
+
+  --background: var(--signal-light-canvas);
+  --foreground: var(--signal-light-text-default);
+  --card: var(--signal-light-base);
+  --card-foreground: var(--signal-light-text-default);
+  --popover: var(--signal-light-elevated);
+  --popover-foreground: var(--signal-light-text-default);
+  --primary: var(--signal-brand);
+  --preloader-fill: var(--primary);
+  --primary-foreground: var(--signal-light-canvas);
+  --secondary: var(--signal-light-fill);
+  --secondary-foreground: var(--signal-light-text-default);
+  --muted: var(--signal-light-fill);
+  --muted-foreground: var(--signal-light-text-subtle);
+  --accent: var(--signal-light-fill-hover);
+  --accent-foreground: var(--signal-light-text-default);
+  --destructive: var(--signal-light-danger);
+  --destructive-foreground: #fff;
+  --border: var(--signal-light-hairline);
+  --input: var(--signal-light-control);
+  --ring: var(--signal-light-hairline);
+
+  --sidebar: var(--signal-light-recessed);
+  --sidebar-foreground: var(--signal-light-text-default);
+  --sidebar-primary: var(--signal-brand);
+  --sidebar-primary-foreground: var(--signal-on-brand);
+  --sidebar-accent: var(--signal-light-fill);
+  --sidebar-accent-foreground: var(--signal-light-text-default);
+  --sidebar-border: var(--signal-light-hairline);
+  --sidebar-ring: var(--signal-light-fill-hover);
+
+  --chart-1: var(--signal-brand);
+  --chart-2: var(--signal-light-link);
+  --chart-3: oklch(87.1% 0.15 154.449);
+  --chart-4: oklch(81.5% 0.197 76);
+  --chart-5: var(--signal-light-text-subtle);
+
+  --color-bg: var(--signal-light-recessed);
+  --color-surface: var(--signal-light-elevated);
+  --color-border: var(--signal-light-hairline);
+  --color-border-hover: var(--signal-light-fill-hover);
+  --color-hover: oklch(92.2% 0 0 / 0.5);
+  --color-text: var(--signal-light-text-default);
+  --color-text-secondary: var(--signal-light-text-subtle);
+  --color-text-tertiary: oklch(70.8% 0 0);
+  --color-accent: var(--signal-brand);
+
+  --flickering-grid-color: var(--signal-light-text-subtle);
+  --flickering-grid-accent: var(--signal-brand);
+}

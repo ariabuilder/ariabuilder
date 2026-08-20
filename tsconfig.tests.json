@@ -1,0 +1,29 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "vite/client", "vitest/globals"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@electron/*": ["./electron/*"],
+      "@shared/*": ["./shared/*"],
+      "@tests/*": ["./tests/*"]
+    }
+  },
+  "include": [
+    "electron/**/*.ts",
+    "shared/**/*.ts",
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "tests/contracts/**/*.ts",
+    "tests/integration/**/*.ts",
+    "tests/helpers/**/*.ts"
+  ],
+  "exclude": [
+    "tests/fixtures/**",
+    "node_modules/**",
+    "dist/**",
+    "dist-electron/**",
+    "release/**",
+    "shared/composer/rawChunks.ts"
+  ]
+}

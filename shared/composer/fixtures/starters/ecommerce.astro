@@ -1,0 +1,25 @@
+---
+import ShopLayout from '../layouts/ShopLayout.astro';
+import ProductCard from '../components/ProductCard.astro';
+
+const products = [
+  { name: 'Canvas Tote', price: '$48', href: '/products/tote' },
+  { name: 'Studio Cap', price: '$32', href: '/products/cap' },
+];
+const showSale = true;
+---
+<ShopLayout title="Shop">
+  <main>
+    {showSale && (
+      <div class="bg-amber-100 px-4 py-2 text-center text-sm">Free shipping this week</div>
+    )}
+    <section class="mx-auto max-w-6xl px-4 py-16">
+      <h1 class="text-3xl font-semibold">All products</h1>
+      <div class="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        {products.map((product) => (
+          <ProductCard name={product.name} price={product.price} href={product.href} />
+        ))}
+      </div>
+    </section>
+  </main>
+</ShopLayout>

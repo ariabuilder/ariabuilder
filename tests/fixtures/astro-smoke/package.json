@@ -1,0 +1,11 @@
+{
+  "name": "aria-packaged-smoke-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev"
+  },
+  "dependencies": {
+    "astro": "7.2.1"
+  }
+}

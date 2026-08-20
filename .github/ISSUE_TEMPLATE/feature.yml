@@ -1,0 +1,62 @@
+name: Feature request
+description: Propose an improvement to an existing Aria workflow.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem and desired outcome. For substantial architecture, IPC, agent, trust, or packaging changes, explain why the current design cannot support the request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what prevents you from doing it today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the result rather than prescribing an implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Note any current workflow or workaround you tried.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Product area
+      options:
+        - Composer
+        - Studio or CMS
+        - AI Engineer
+        - Git or terminal
+        - Project setup or runtime
+        - Packaging, installation, or updates
+        - Documentation or contributor experience
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add sketches, examples, or links that clarify the request.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and the roadmap for this request.
+          required: true
+        - label: I am willing to help test or document this change.
+          required: false

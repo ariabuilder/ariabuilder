@@ -1,0 +1,13 @@
+---
+const title = 'Hero';
+const html = '<em>raw</em>';
+---
+<>
+  <h1 class:list={['hero', { active: true }]} set:text={title} />
+  <div set:html={html} />
+  <Counter client:load client:visible={false} />
+</>
+<!-- note -->
+<style>
+  .hero { color: tomato; }
+</style>

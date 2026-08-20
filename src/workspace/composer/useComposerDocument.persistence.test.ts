@@ -1,0 +1,270 @@
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { isProxy, isReactive, ref } from "vue"
+import type { AstroDocumentModel } from "../../../shared/composer/types"
+import { createComposerBeacon } from "./selection/useComposerBeacon"
+import { useComposerDocument } from "./useComposerDocument"
+import { blankModel } from "./useComposerDocument.fixture"
+
+const commitComposerEditTransaction = vi.fn()
+const readComposerClipboard = vi.fn()
+const writeComposerClipboard = vi.fn()
+const listStylesheets = vi.fn()
+
+vi.mock("@/lib/composer", () => ({
+  commitComposerEditTransaction: (...args: unknown[]) => commitComposerEditTransaction(...args),
+  parseComposerPage: vi.fn(),
+}))
+vi.mock("@/lib/design", () => ({
+  listStylesheets: (...args: unknown[]) => listStylesheets(...args),
+  readStylesheet: vi.fn(),
+}))
+vi.mock("@/lib/composerClipboard", () => ({
+  readComposerClipboard: (...args: unknown[]) => readComposerClipboard(...args),
+  writeComposerClipboard: (...args: unknown[]) => writeComposerClipboard(...args),
+}))
+vi.mock("@/lib/keyboardShortcuts", () => ({ isEditableKeyboardTarget: () => false }))
+
+beforeEach(() => {
+  commitComposerEditTransaction.mockReset()
+  readComposerClipboard.mockReset()
+  readComposerClipboard.mockResolvedValue({})
+  writeComposerClipboard.mockReset()
+  writeComposerClipboard.mockResolvedValue(undefined)
+  listStylesheets.mockReset()
+  listStylesheets.mockResolvedValue([])
+  commitComposerEditTransaction.mockResolvedValue({
+    ok: true,
+    revisions: [{ relativeFile: "src/layouts/BaseLayout.astro", mtimeMs: 2000 }],
+  })
+})
+
+describe("useComposerDocument persistence", () => {
+  it("clones the reactive model so Electron IPC structured-clone succeeds", async () => {
+    const projectPath = ref("/tmp/project")
+    const editFile = ref<string | null>("src/layouts/BaseLayout.astro")
+    const editedMtimeMs = ref<number | null>(1000)
+    const model = ref<AstroDocumentModel | null>(blankModel())
+    const editable = ref(true)
+    const designActive = ref(true)
+    const codeDirty = ref(false)
+
+    expect(isReactive(model.value)).toBe(true)
+
+    const doc = useComposerDocument({
+      projectPath,
+      editFile,
+      editedMtimeMs,
+      model,
+      editable,
+      designActive,
+      codeDirty,
+      beacon: createComposerBeacon(),
+    })
+
+    const ok = doc.mutateModel((next) => {
+      const body = next.nodes[0]
+      if (body?.kind !== "element" || !body.children) return { ok: false }
+      body.children.push({
+        id: "slot-sidebar",
+        kind: "slot",
+        props: { name: { type: "string", value: "sidebar" } },
+        children: null,
+      })
+      return { ok: true }
+    })
+    expect(ok).toBe(true)
+    expect(doc.dirty.value).toBe(true)
+
+    await doc.flushSave()
+
+    expect(commitComposerEditTransaction).toHaveBeenCalledTimes(1)
+    const transaction = commitComposerEditTransaction.mock.calls[0]![0] as {
+      page: { model: AstroDocumentModel }
+    }
+    const payloadModel = transaction.page.model
+    expect(isProxy(payloadModel)).toBe(false)
+    expect(() => structuredClone(payloadModel)).not.toThrow()
+    expect(doc.dirty.value).toBe(false)
+    expect(doc.saveError.value).toBeNull()
+  })
+
+  it("debounces Inspector persistence without re-revealing the selected node", async () => {
+    vi.useFakeTimers()
+    try {
+      const beacon = createComposerBeacon()
+      beacon.illuminate("0", { source: "structure", occurrence: 2 })
+      const revealNonce = beacon.revealRequest.value?.nonce
+      const model = ref<AstroDocumentModel | null>(blankModel())
+      const beforeFlush = vi.fn()
+      const doc = useComposerDocument({
+        projectPath: ref("/tmp/project"),
+        editFile: ref<string | null>("src/layouts/BaseLayout.astro"),
+        editedMtimeMs: ref<number | null>(1000),
+        model,
+        editable: ref(true),
+        designActive: ref(true),
+        codeDirty: ref(false),
+        beacon,
+      })
+      doc.registerBeforeFlush(beforeFlush)
+
+      expect(
+        doc.setSelectedProp(
+          "style",
+          { type: "string", value: "opacity: 0.4" },
+          { immediate: false },
+        ),
+      ).toBe(true)
+      expect(beacon.revealRequest.value?.nonce).toBe(revealNonce)
+      expect(beacon.selectedOccurrence.value).toBe(2)
+      expect(commitComposerEditTransaction).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(749)
+      expect(commitComposerEditTransaction).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(commitComposerEditTransaction).toHaveBeenCalledTimes(1)
+      expect(beforeFlush).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("refreshes a same-path selection when its model identity changes", () => {
+    vi.useFakeTimers()
+    try {
+      const model = ref<AstroDocumentModel | null>({
+        imports: [], extraFrontmatter: "", propSchema: [], slots: [], extendsTag: null,
+        nodes: [{ id: "old-node", kind: "element", name: "div", props: {}, children: [] }],
+      })
+      const beacon = createComposerBeacon()
+      beacon.illuminate("0", { source: "canvas", occurrence: 2 })
+      const refresh = vi.spyOn(beacon, "setSelections")
+      const doc = useComposerDocument({
+        projectPath: ref("/tmp/project"),
+        editFile: ref<string | null>("src/pages/index.astro"),
+        editedMtimeMs: ref<number | null>(1000),
+        model,
+        editable: ref(true),
+        designActive: ref(true),
+        codeDirty: ref(false),
+        beacon,
+      })
+
+      expect(doc.mutateModel((next) => {
+        next.nodes[0] = {
+          id: "replacement-node", kind: "element", name: "section", props: {}, children: [],
+        }
+        return { ok: true }
+      })).toBe(true)
+
+      expect(refresh).toHaveBeenCalledWith(
+        [{ path: "0", occurrence: 2 }],
+        { source: "api", reveal: "none" },
+      )
+      expect(beacon.selectedPath.value).toBe("0")
+      expect(beacon.selectedOccurrence.value).toBe(2)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it("still flushes when stagedSource is set but the code draft is clean", async () => {
+    const projectPath = ref("/tmp/project")
+    const editFile = ref<string | null>("src/layouts/BaseLayout.astro")
+    const editedMtimeMs = ref<number | null>(1000)
+    const model = ref<AstroDocumentModel | null>(blankModel())
+    const editable = ref(true)
+    const designActive = ref(true)
+    const codeDirty = ref(false)
+    const stagedSource = ref<string | null>(null)
+
+    const doc = useComposerDocument({
+      projectPath,
+      editFile,
+      editedMtimeMs,
+      model,
+      editable,
+      designActive,
+      stagedSource,
+      codeDirty,
+      beacon: createComposerBeacon(),
+    })
+
+    expect(
+      doc.mutateModel((next) => {
+        const body = next.nodes[0]
+        if (body?.kind !== "element" || !body.children) return { ok: false }
+        body.children.push({
+          id: "slot-aside",
+          kind: "slot",
+          props: { name: { type: "string", value: "aside" } },
+          children: null,
+        })
+        return { ok: true }
+      }),
+    ).toBe(true)
+    expect(doc.dirty.value).toBe(true)
+
+    // Simulate entering code mode with a clean editor after the document edit.
+    stagedSource.value = "---\n---\n<body><slot /><slot name=\"aside\" /></body>\n"
+    commitComposerEditTransaction.mockClear()
+
+    await doc.flushSave()
+    expect(commitComposerEditTransaction).toHaveBeenCalledTimes(1)
+    expect(doc.dirty.value).toBe(false)
+  })
+
+  it("does not flush while a dirty code draft owns the source", async () => {
+    const projectPath = ref("/tmp/project")
+    const editFile = ref<string | null>("src/layouts/BaseLayout.astro")
+    const editedMtimeMs = ref<number | null>(1000)
+    const model = ref<AstroDocumentModel | null>(blankModel())
+    const editable = ref(true)
+    const designActive = ref(true)
+    const codeDirty = ref(true)
+    const stagedSource = ref<string | null>("---\n---\n<body><slot /></body>\n")
+
+    const doc = useComposerDocument({
+      projectPath,
+      editFile,
+      editedMtimeMs,
+      model,
+      editable,
+      designActive,
+      stagedSource,
+      codeDirty,
+      beacon: createComposerBeacon(),
+    })
+
+    // Force dirty without going through staged patch scheduling.
+    model.value = {
+      ...blankModel(),
+      nodes: [
+        {
+          id: "body",
+          kind: "element",
+          name: "body",
+          props: {},
+          children: [],
+        },
+      ],
+    }
+    // mutateModel with staged source still marks dirty when patch succeeds;
+    // if patch fails we still need dirty — set via a disk-path mutation first.
+    codeDirty.value = false
+    stagedSource.value = null
+    doc.mutateModel((next) => {
+      next.nodes = blankModel().nodes
+      return { ok: true }
+    })
+    expect(doc.dirty.value).toBe(true)
+    codeDirty.value = true
+    stagedSource.value = "---\n---\n<body><slot /></body>\n"
+    commitComposerEditTransaction.mockClear()
+
+    await doc.flushSave()
+    expect(commitComposerEditTransaction).not.toHaveBeenCalled()
+    expect(doc.dirty.value).toBe(true)
+  })
+})

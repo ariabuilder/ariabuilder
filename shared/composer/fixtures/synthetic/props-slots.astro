@@ -1,0 +1,14 @@
+---
+interface Props {
+  title: string;
+  count?: number;
+  variant?: 'primary' | 'secondary';
+  open?: boolean;
+}
+const { title, count = 1, variant = 'primary', open = false } = Astro.props;
+---
+<section data-count={count} data-variant={variant} data-open={open}>
+  <h2>{title}</h2>
+  <slot />
+  <slot name="footer" />
+</section>

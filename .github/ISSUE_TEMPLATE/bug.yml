@@ -1,0 +1,105 @@
+name: Bug report
+description: Report a reproducible problem in Aria.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Aria. Do not include secrets or vulnerability details here. Report security issues through the [security policy](https://github.com/ariabuilder/ariabuilder/security/policy).
+
+  - type: input
+    id: version
+    attributes:
+      label: Aria version
+      description: Enter the app version, tag, or commit SHA you tested.
+      placeholder: 0.1.0-preview.1 or abc1234
+    validations:
+      required: true
+
+  - type: dropdown
+    id: distribution
+    attributes:
+      label: How did you run Aria?
+      options:
+        - Downloaded app
+        - Source checkout with npm run dev
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: operating-system-version
+    attributes:
+      label: Operating system version
+      placeholder: macOS 26.0, Windows 11 24H2, or Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Composer
+        - Studio or CMS
+        - AI Engineer
+        - Git or terminal
+        - Project setup or runtime
+        - Packaging, installation, or updates
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide the shortest sequence that reproduces the problem.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, or sample project
+      description: Remove API keys, tokens, personal paths, and private project content before attaching anything.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: This report does not contain vulnerability details or secrets.
+          required: true
