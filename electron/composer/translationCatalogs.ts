@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import type { FieldSchema } from "../../shared/cms";
 import type {
@@ -311,7 +313,33 @@ function evaluateExpression(
   throw new Error(`Computed value at ${pathParts.join(".") || "catalog"}`);
 }
 
-function candidateFiles(root: string): string[] {
+function isGeneratedTranslationPath(relativeFile: string): boolean {
+  const normalized = toPosix(relativeFile).toLowerCase();
+  return (
+    normalized.endsWith(".d.ts") ||
+    normalized.startsWith("src/paraglide/") ||
+    normalized.startsWith("src/generated/")
+  );
+}
+
+function isGeneratedTranslationDirectory(relativeDirectory: string): boolean {
+  const normalized = toPosix(relativeDirectory).toLowerCase().replace(/\/+$/, "");
+  return normalized === "src/paraglide" || normalized === "src/generated";
+}
+
+export function isTranslationRegistryChange(relativeFile: string): boolean {
+  const normalized = toPosix(relativeFile).replace(/^\.\//, "");
+  if (!normalized) return true;
+  if (isGeneratedTranslationPath(normalized)) return false;
+  if (/\.astro$/i.test(normalized)) return true;
+  if (normalized.toLowerCase() === ".aria/site-settings.json") return true;
+  return (
+    /\.(?:ts|js|mjs|cjs|mts|cts|json)$/i.test(normalized) &&
+    CANDIDATE_NAME.test(normalized)
+  );
+}
+
+export function translationCandidateFiles(root: string): string[] {
   const files: string[] = [];
   const walk = (directory: string) => {
     if (files.length >= MAX_SOURCE_FILES) return;
@@ -321,8 +349,17 @@ function candidateFiles(root: string): string[] {
       if (files.length >= MAX_SOURCE_FILES) break;
       if (entry.name.startsWith(".") || ["node_modules", "dist", "build", "coverage"].includes(entry.name)) continue;
       const absolute = path.join(directory, entry.name);
-      if (entry.isDirectory()) walk(absolute);
-      else if (/\.(?:ts|js|mjs|cjs|mts|cts|json)$/i.test(entry.name) && CANDIDATE_NAME.test(toPosix(path.relative(root, absolute)))) files.push(absolute);
+      if (entry.isDirectory()) {
+        if (!isGeneratedTranslationDirectory(path.relative(root, absolute))) walk(absolute);
+      }
+      else {
+        const relative = toPosix(path.relative(root, absolute));
+        if (
+          /\.(?:ts|js|mjs|cjs|mts|cts|json)$/i.test(entry.name) &&
+          CANDIDATE_NAME.test(relative) &&
+          !isGeneratedTranslationPath(relative)
+        ) files.push(absolute);
+      }
     }
   };
   const src = path.join(root, "src");
@@ -357,7 +394,7 @@ function flattenTree(value: LiteralTree, prefix: string[] = [], output = new Map
 }
 
 function detectResolver(root: string): ProjectLocaleResolver {
-  const files = candidateFiles(root).filter((file) => /\.(?:ts|js|astro)$/i.test(file)).slice(0, 500);
+  const files = translationCandidateFiles(root).filter((file) => /\.(?:ts|js|astro)$/i.test(file)).slice(0, 500);
   for (const file of files) {
     const source = readSmallFile(file);
     const match = source && /searchParams\.get\(\s*["']([A-Za-z][A-Za-z0-9_-]*)["']\s*\)/.exec(source);
@@ -502,12 +539,13 @@ function buildCatalog(
   return catalog;
 }
 
-async function discover(root: string): Promise<ProjectTranslationCatalogResult> {
+export async function discoverProjectTranslationCatalogsInProcess(root: string): Promise<ProjectTranslationCatalogResult> {
+  const startedAt = Date.now();
   const moduleCache = new Map<string, ModuleRecord>();
   const resolver = detectResolver(root);
   const catalogs: ProjectTranslationCatalog[] = [];
   const unsupported: ProjectTranslationCatalogResult["unsupported"] = [];
-  for (const absoluteFile of candidateFiles(root)) {
+  for (const absoluteFile of translationCandidateFiles(root)) {
     if (absoluteFile.endsWith(".json")) {
       const evaluated = jsonEvaluated(root, absoluteFile);
       if (!evaluated) {
@@ -546,7 +584,38 @@ async function discover(root: string): Promise<ProjectTranslationCatalogResult> 
     }
   }
   const unique = catalogs.filter((catalog, index) => catalogs.findIndex((candidate) => candidate.id === catalog.id) === index);
+  console.info(
+    `[aria:perf] Translation discovery completed in ${Date.now() - startedAt}ms across ${moduleCache.size} parsed modules.`,
+  );
   return { catalogs: unique, unsupported, scannedAt: new Date().toISOString() };
+}
+
+type TranslationWorkerResponse =
+  | { ok: true; result: ProjectTranslationCatalogResult }
+  | { ok: false; error: string };
+
+async function discover(root: string): Promise<ProjectTranslationCatalogResult> {
+  if (!process.versions.electron || process.env.VITEST) {
+    return discoverProjectTranslationCatalogsInProcess(root);
+  }
+  return new Promise((resolve, reject) => {
+    const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+    const electronOutputDirectory = path.basename(moduleDirectory) === "chunks"
+      ? path.dirname(moduleDirectory)
+      : moduleDirectory;
+    const worker = new Worker(
+      path.join(electronOutputDirectory, "translation-catalog-worker.mjs"),
+      { workerData: { root } },
+    );
+    worker.once("message", (message: TranslationWorkerResponse) => {
+      if (message.ok) resolve(message.result);
+      else reject(new Error(message.error));
+    });
+    worker.once("error", reject);
+    worker.once("exit", (code) => {
+      if (code !== 0) reject(new Error(`Translation discovery worker stopped with code ${code}.`));
+    });
+  });
 }
 
 export function invalidateTranslationCatalogRegistry(projectPath: string): void {

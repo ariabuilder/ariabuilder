@@ -78,6 +78,7 @@ export type ProjectTrustRevocationResult =
 export type ProjectChange = {
   path: string;
   kind: "source" | "asset";
+  category?: "structure" | "content" | "style" | "asset" | "config" | "other";
 };
 
 export type CreateAstroOpts = {

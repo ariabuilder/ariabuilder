@@ -9,6 +9,7 @@ import {
   editProjectTranslationValue,
   invalidateTranslationCatalogRegistry,
   listProjectTranslationCatalogs,
+  translationCandidateFiles,
 } from "./translationCatalogs";
 import { updateContentLocalization } from "../siteSettings";
 import { getEntry } from "../cms";
@@ -78,6 +79,19 @@ describe("project translation catalog discovery", () => {
     const discovered = await listProjectTranslationCatalogs(root);
     expect(discovered.catalogs.find((catalog) => catalog.exportName === "messages")?.locales).toEqual(["en-CA", "fr-CA"]);
     expect(discovered.unsupported).toContainEqual(expect.objectContaining({ exportName: "runtimeMessages", reason: expect.stringContaining("Computed value") }));
+  });
+
+  it("skips generated Paraglide modules and declarations before parsing", async () => {
+    const root = fixture();
+    for (let index = 0; index < 2_100; index += 1) {
+      write(root, `src/paraglide/messages/message-${index}.js`, `export const message${index} = () => "value";\n`);
+      write(root, `src/paraglide/messages/message-${index}.d.ts`, `export declare const message${index}: () => string;\n`);
+    }
+    write(root, "src/i18n/messages.ts", "export const messages = { en: { home: { title: 'Hello' } }, fr: { home: { title: 'Bonjour' } } } as const;\n");
+
+    const candidates = translationCandidateFiles(root).map((file) => path.relative(root, file).replace(/\\/g, "/"));
+    expect(candidates).toEqual(["src/i18n/messages.ts"]);
+    expect((await listProjectTranslationCatalogs(root, true)).catalogs).toHaveLength(1);
   });
 
   it("creates per-namespace locale drafts and applies a separately reviewed hash-matched cutover", async () => {

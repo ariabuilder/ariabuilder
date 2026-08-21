@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue"
+import { computed, onMounted, ref, watch } from "vue"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -82,6 +82,10 @@ const boundExpression = computed(() => {
 })
 const hasManagedBinding = computed(() => boundExpression.value.includes("@aria-translation-fallback"))
 const settingsDiffer = ref(false)
+
+onMounted(() => {
+  if (!translations?.result.value.scannedAt) void translations?.refresh()
+})
 
 function relativeImport(fromFile: string, toFile: string): string {
   const from = fromFile.split("/").slice(0, -1)

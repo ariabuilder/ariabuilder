@@ -196,8 +196,6 @@ provideComposerTranslations({
   refresh: refreshTranslationCatalogs,
 })
 
-watch(() => props.projectPath, () => { void refreshTranslationCatalogs() }, { immediate: true })
-
 const beacon = provideComposerBeacon()
 provideComposerModeNavigation({ openCode: () => void onSurfaceMode("code") })
 

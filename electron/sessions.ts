@@ -17,7 +17,7 @@ import {
 import {
   disposeTranslationCatalogRegistry,
   invalidateTranslationCatalogRegistry,
-  warmTranslationCatalogRegistry,
+  isTranslationRegistryChange,
 } from "./composer/translationCatalogs";
 import { isAstroProject } from "./project";
 import type { ProjectRuntimeSession } from "../shared/types";
@@ -168,6 +168,7 @@ export function openSession(
 }
 
 async function openSessionInternal(key: string): Promise<ProjectRuntimeSession> {
+  const startedAt = Date.now();
   await closing.get(key);
   if (!isAstroProject(key)) throw new Error("The selected folder is not an Astro project");
   const existing = sessions.get(key);
@@ -199,9 +200,8 @@ async function openSessionInternal(key: string): Promise<ProjectRuntimeSession> 
   };
   sessions.set(key, record);
   const watcher = new ProjectWatcher(key, (change) => {
-    if (!change.path || /\.(?:astro|ts|tsx|js|jsx|mjs|cjs|mts|cts|json)$/i.test(change.path)) {
+    if (isTranslationRegistryChange(change.path)) {
       invalidateTranslationCatalogRegistry(key);
-      warmTranslationCatalogRegistry(key);
     }
     if (!change.path || change.path.endsWith(".astro")) {
       try {
@@ -214,8 +214,8 @@ async function openSessionInternal(key: string): Promise<ProjectRuntimeSession> 
   });
   watcher.start();
   watchers.set(key, watcher);
-  warmTranslationCatalogRegistry(key);
   notify(record);
+  console.info(`[aria:perf] Project session opened in ${Date.now() - startedAt}ms.`);
   return record;
 }
 
