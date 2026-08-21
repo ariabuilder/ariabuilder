@@ -836,7 +836,12 @@ ${MORPHDOM_SOURCE}
     ),
     ...[...doc.querySelectorAll("head base, head link, head meta, head style, head title")]
       .filter((node) =>
-        !["aria-design-style", "aria-composer-preview-style", "aria-composer-display-style"].includes(node.id) &&
+        ![
+          "aria-design-style",
+          "aria-composer-preview-style",
+          "aria-composer-display-style",
+          "aria-transient-scrollbars",
+        ].includes(node.id) &&
         !node.hasAttribute("data-aria-motion-asset") &&
         !node.hasAttribute("data-aria-composer-font-asset") &&
         !node.hasAttribute("data-vite-dev-id") &&
