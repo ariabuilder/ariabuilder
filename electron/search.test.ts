@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { searchProject } from "./search";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ProjectSearchService, searchProject } from "./search";
 
 describe("project global search", () => {
   let root = "";
@@ -63,5 +63,33 @@ describe("project global search", () => {
   it("rejects oversized queries and result bounds", async () => {
     await expect(searchProject(root, { query: "x".repeat(129), limit: 20 })).rejects.toThrow();
     await expect(searchProject(root, { query: "", limit: 101 })).rejects.toThrow();
+  });
+
+  it("single-flights rapid inventory requests and invalidates only relevant change categories", async () => {
+    let releaseScan: (() => void) | undefined;
+    const scanProject = vi.fn(() => new Promise((resolve) => {
+      releaseScan = () => resolve({ pages: [], components: [], layouts: [] });
+    }));
+    const service = new ProjectSearchService({
+      scanProject: scanProject as never,
+      readCollections: vi.fn(() => ({ collections: [] })) as never,
+      listEntries: vi.fn() as never,
+      listMedia: vi.fn(() => []) as never,
+    });
+
+    const first = service.searchProject(root, { query: "design", limit: 20 });
+    const second = service.searchProject(root, { query: "settings", limit: 20 });
+    expect(scanProject).toHaveBeenCalledTimes(1);
+    releaseScan?.();
+    await Promise.all([first, second]);
+
+    service.invalidate(root, { category: "style" });
+    await service.searchProject(root, { query: "history", limit: 20 });
+    expect(scanProject).toHaveBeenCalledTimes(1);
+
+    scanProject.mockResolvedValueOnce({ pages: [], components: [], layouts: [] });
+    service.invalidate(root, { category: "structure" });
+    await service.searchProject(root, { query: "history", limit: 20 });
+    expect(scanProject).toHaveBeenCalledTimes(2);
   });
 });

@@ -22,13 +22,16 @@ await esbuild.build({
 const require = createRequire(import.meta.url);
 const { parsePorcelainStatus, getGitStatus, commitAll } = require(out);
 
-const sample = `## main...origin/main [ahead 2, behind 1]
-M  staged.ts
- M unstaged.ts
-MM both.ts
-?? untracked.ts
-R  old.ts -> renamed.ts
-`;
+const sample = [
+  "## main...origin/main [ahead 2, behind 1]",
+  "M  staged.ts",
+  " M unstaged.ts",
+  "MM both.ts",
+  "?? untracked.ts",
+  "R  renamed → café.ts",
+  "old name.ts",
+  "",
+].join("\0");
 
 const parsed = parsePorcelainStatus(sample);
 assert.equal(parsed.branch, "main");
@@ -39,7 +42,7 @@ assert.equal(parsed.staged.length, 3);
 assert.equal(parsed.unstaged.length, 2);
 assert.equal(parsed.untracked.length, 1);
 assert.equal(parsed.dirty, true);
-assert.ok(parsed.staged.some((f) => f.path === "renamed.ts"));
+assert.ok(parsed.staged.some((f) => f.path === "renamed → café.ts"));
 
 const fixture = mkdtempSync(path.join(tmpdir(), "aria-git-repo-"));
 try {

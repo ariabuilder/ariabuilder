@@ -22,13 +22,17 @@ export interface RendererSmokeController {
   fail(error: unknown): void;
 }
 
-async function withSmokeTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+async function withSmokeTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs = 5_000,
+): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out`)), 5_000);
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
       }),
     ]);
   } finally {
@@ -88,6 +92,8 @@ export function createRendererSmokeController(
     bootProject?: string,
   ): Promise<void> => {
     if (!shouldRun() || win.isDestroyed()) return;
+    let translationDiscovery = false;
+    let terminalStarted = false;
     try {
       if (isSmokeOpen && bootProject) {
         trustProject(options.userDataPath, bootProject, "smoke");
@@ -165,6 +171,56 @@ export function createRendererSmokeController(
             `window.aria.composer.clearPreviewDraft(${JSON.stringify(bootProject)}, ${JSON.stringify(leaseId)})`,
           ).catch(() => undefined);
         }
+
+        const translationResult = await withSmokeTimeout(
+          win.webContents.executeJavaScript(
+            `window.aria.composer.listTranslationCatalogs(${JSON.stringify(bootProject)}, true)`,
+          ),
+          "translation discovery IPC",
+          20_000,
+        );
+        translationDiscovery = Boolean(
+          translationResult &&
+          Array.isArray(translationResult.catalogs) &&
+          Array.isArray(translationResult.unsupported) &&
+          typeof translationResult.scannedAt === "string",
+        );
+        if (!translationDiscovery) {
+          throw new Error("Translation discovery IPC returned an invalid result");
+        }
+
+        terminalStarted = await withSmokeTimeout(
+          win.webContents.executeJavaScript(`
+            (async () => {
+              const marker = "ARIA_TERMINAL_SMOKE_${Date.now()}";
+              const terminal = await window.aria.terminal.create(${JSON.stringify(bootProject)}, 80, 24);
+              let unsubscribe = () => undefined;
+              try {
+                await new Promise((resolve, reject) => {
+                  let settled = false;
+                  const finish = (error) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    if (error) reject(error);
+                    else resolve(undefined);
+                  };
+                  const timer = setTimeout(() => finish(new Error("Terminal did not echo its smoke marker")), 10_000);
+                  unsubscribe = window.aria.terminal.onData((payload) => {
+                    if (payload.id === terminal.id && payload.data.includes(marker)) finish();
+                  });
+                  window.aria.terminal.write(terminal.id, "echo " + marker + "\\r").catch(finish);
+                });
+                return true;
+              } finally {
+                unsubscribe();
+                await window.aria.terminal.dispose(terminal.id).catch(() => undefined);
+              }
+            })()
+          `),
+          "terminal startup IPC",
+          15_000,
+        );
       }
 
       const { version, sessionList } = await waitForSmokeIpc(win.webContents);
@@ -206,6 +262,8 @@ export function createRendererSmokeController(
             item.authoringState === "ready",
         );
       report.ipcOk = typeof version === "string" && report.sessionCount !== null;
+      report.translationDiscovery = translationDiscovery;
+      report.terminalStarted = terminalStarted;
       report.ipcError = null;
       const valid =
         report.htmlLen > 0 &&
@@ -216,7 +274,9 @@ export function createRendererSmokeController(
         (!isSmokeOpen || (
           report.sessionCount === 1 &&
           report.runtimeLive &&
-          report.authoringReady
+          report.authoringReady &&
+          report.translationDiscovery &&
+          report.terminalStarted
         ));
       if (valid) {
         console.log(
