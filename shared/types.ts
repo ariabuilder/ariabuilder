@@ -15,6 +15,23 @@ export type RuntimeStatus =
   | "needs_install"
   | "installing";
 
+export type RuntimeAuthoringState =
+  | "stopped"
+  | "starting"
+  | "ready"
+  | "blocked_external"
+  | "failed";
+
+export type RuntimeRecoveryAction =
+  | "none"
+  | "retry"
+  | "replace_external";
+
+export type ExternalPreview = {
+  pid: number;
+  url: string;
+};
+
 export type ProjectRuntimeSession = {
   path: string;
   name: string;
@@ -33,6 +50,12 @@ export type ProjectRuntimeSession = {
   markersPresent?: boolean | null;
   /** Non-fatal Composer warning (e.g. adopted foreign server without markers). */
   composerWarning?: string | null;
+  /** Structured Composer readiness. Renderer code must not infer this from warnings. */
+  authoringState: RuntimeAuthoringState;
+  /** Recovery operation the runtime can safely perform for the current state. */
+  recoveryAction: RuntimeRecoveryAction;
+  /** Existing non-Aria preview that blocks authoring on older Astro versions. */
+  externalPreview: ExternalPreview | null;
 };
 
 export type ProjectTrustOrigin = "user-approved" | "aria-created" | "smoke";
@@ -55,6 +78,7 @@ export type ProjectTrustRevocationResult =
 export type ProjectChange = {
   path: string;
   kind: "source" | "asset";
+  category?: "structure" | "content" | "style" | "asset" | "config" | "other";
 };
 
 export type CreateAstroOpts = {

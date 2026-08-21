@@ -5,6 +5,29 @@ import { asMessageEventSource } from "./designClientSource.testUtils"
 import { ARIA_MSG, ARIA_PROTOCOL_VERSION } from "../../shared/composer/protocol"
 
 describe("Composer design client computed styles", () => {
+  it.each(["Win32", "Linux x86_64"])("uses transient scrollbars for %s Composer previews", async (platform) => {
+    const dom = new JSDOM(`<!doctype html><html><head></head><body><main style="height: 200vh"></main></body></html>`, {
+      url: "http://127.0.0.1:4321/#aria-design",
+      runScripts: "dangerously",
+      pretendToBeVisual: true,
+    })
+    const { window } = dom
+    Object.defineProperty(window.navigator, "platform", { configurable: true, value: platform })
+
+    window.eval(DESIGN_CLIENT_SOURCE)
+    window.document.dispatchEvent(new window.Event("DOMContentLoaded"))
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+
+    const style = window.document.getElementById("aria-transient-scrollbars")
+    expect(style?.textContent).toContain("scrollbar-width: thin")
+    expect(style?.textContent).toContain("scrollbar-color: transparent transparent")
+    expect(window.document.documentElement.hasAttribute("data-aria-transient-scrollbars")).toBe(true)
+
+    window.document.dispatchEvent(new window.Event("scroll"))
+    expect(window.document.documentElement.hasAttribute("data-aria-scroll-active")).toBe(true)
+    dom.window.close()
+  })
+
   it("resolves a stylesheet color on an inline descendant source path", async () => {
     const dom = new JSDOM(`<!doctype html><html><head>
       <style>.project-heading strong { color: rgb(24, 74, 138); }</style>
@@ -153,7 +176,7 @@ describe("Composer design client computed styles", () => {
     expect(destroyMotion).toHaveBeenCalledTimes(1)
     expect((window as unknown as { AriaMotion?: unknown }).AriaMotion).toBeUndefined()
     expect(window.document.querySelector('[data-aria-motion-asset]')).toBeNull()
-    expect(ARIA_PROTOCOL_VERSION).toBe(11)
+    expect(ARIA_PROTOCOL_VERSION).toBe(12)
     dom.window.close()
   })
 
@@ -254,7 +277,12 @@ describe("Composer design client computed styles", () => {
     await new Promise((resolve) => window.setTimeout(resolve, 0))
     window.dispatchEvent(new window.MessageEvent("message", {
       source: asMessageEventSource(window),
-      data: { type: ARIA_MSG.track, paths: ["0"], scope: "" },
+      data: {
+        type: ARIA_MSG.track,
+        trackingRevision: 1,
+        paths: ["0"],
+        scope: "",
+      },
     }))
     await vi.waitFor(() => {
       expect(rectMessages.at(-1)?.rects?.["0"]?.[0]?.w).toBe(100)

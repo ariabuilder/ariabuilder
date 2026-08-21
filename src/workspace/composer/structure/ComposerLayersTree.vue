@@ -321,7 +321,7 @@ function revealRow(key: string | null, moveFocus = false) {
       .find((element) => element.dataset.layerKey === key)
     if (item) {
       if (moveFocus) item.focus({ preventScroll: true })
-      item.scrollIntoView({ block: "nearest" })
+      item.scrollIntoView({ block: "nearest", inline: "nearest" })
       revealFrame = null
       return
     }
@@ -1019,8 +1019,13 @@ function autoScroll(event: DragEvent) {
   if (!scroller) return
   const rect = scroller.getBoundingClientRect()
   const edge = 32
-  if (event.clientY < rect.top + edge) scroller.scrollBy({ top: -10 })
-  else if (event.clientY > rect.bottom - edge) scroller.scrollBy({ top: 10 })
+  let left = 0
+  let top = 0
+  if (event.clientX < rect.left + edge) left = -10
+  else if (event.clientX > rect.right - edge) left = 10
+  if (event.clientY < rect.top + edge) top = -10
+  else if (event.clientY > rect.bottom - edge) top = 10
+  if (left || top) scroller.scrollBy({ left, top })
 }
 
 onBeforeUnmount(() => {
@@ -1077,7 +1082,7 @@ onMounted(() => {
       >
         <div
           data-layer-scroll-region="structure"
-          class="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-1 pb-1"
+          class="flex min-h-0 flex-1 flex-col overflow-x-auto overflow-y-auto overscroll-contain px-1 pb-1 [container-type:inline-size]"
           @dragover="autoScroll"
           @dragleave.self="clearDrop"
         >
@@ -1097,7 +1102,12 @@ onMounted(() => {
 
             <template v-else>
               <section v-if="layoutRows.length" class="py-1">
-                <div role="tree" aria-label="Page layout" class="outline-none">
+                <div
+                  role="tree"
+                  aria-label="Page layout"
+                  class="w-max min-w-full outline-none"
+                  data-layer-scroll-content
+                >
                   <StructureTreeNode
                     v-for="row in layoutRows"
                     :key="row.treeKey"
@@ -1137,7 +1147,8 @@ onMounted(() => {
             tag="div"
             role="tree"
             aria-label="Content layers"
-            class="flex min-h-7 flex-col text-foreground outline-none"
+            class="flex min-h-7 w-max min-w-full flex-col text-foreground outline-none"
+            data-layer-scroll-content
             :data-layer-parent="tree.contentParentPath ?? ''"
             data-layer-region="content"
             :group="{ name: 'aria-composer-layers', pull: true, put: true }"
@@ -1248,7 +1259,7 @@ onMounted(() => {
           <div
             v-if="showDocument"
             data-layer-scroll-region="document"
-            class="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6"
+            class="min-h-0 flex-1 overflow-x-auto overflow-y-auto overscroll-contain pb-6 [container-type:inline-size]"
             @dragover="autoScroll"
             @dragleave.self="clearDrop"
           >
@@ -1258,7 +1269,8 @@ onMounted(() => {
               tag="div"
               role="tree"
               :aria-label="m.composer_layers_document_hint()"
-              class="layer-children outline-none"
+              class="layer-children w-max min-w-full outline-none"
+              data-layer-scroll-content
               data-layer-parent=""
               data-layer-region="document"
               :group="{ name: 'aria-composer-layers', pull: true, put: true }"
@@ -1364,6 +1376,10 @@ onMounted(() => {
   display: block;
   margin-inline-start: 0.375rem;
   padding-inline-start: 0.5rem;
+}
+
+:deep([data-layer-scroll-content] [data-layer-node]) {
+  inline-size: 100cqi;
 }
 
 :deep(.layer-children > [data-layer-node])::before,

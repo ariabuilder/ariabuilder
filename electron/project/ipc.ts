@@ -1,6 +1,6 @@
 import { type IpcMainInvokeEvent } from "../electron-api";
 import { addRecent, cancelProjectCreation, consumeApprovedProjectOpen, createAstroProject, listRecents, isRecentProject, openProjectDialog, pickNewProjectDir, removeRecent, type CreateAstroOpts } from "../project";
-import { closeSession, installSessionDeps, listSessions, openSession, requireOpenSession, requireSessionOwner, sessionOwnerCount, startSessionRuntime, restartSessionRuntime, stopSessionRuntime } from "../sessions";
+import { closeSession, installSessionDeps, listSessions, openSession, replaceExternalSessionRuntime, requireOpenSession, requireSessionOwner, sessionOwnerCount, startSessionRuntime, restartSessionRuntime, stopSessionRuntime } from "../sessions";
 import { consumeProjectTrustChallenge, createProjectTrustChallenge, isProjectTrusted, revokeProjectTrust, trustProject } from "../projectTrust";
 import { disposeTerminalsForOwnerCwd } from "../terminal";
 import { disposeAgentStateForProject } from "../agent";
@@ -168,6 +168,13 @@ export function registerProjectIpc(
         throw new Error("Project path is required");
       }
       return restartSessionRuntime(requireSessionOwner(projectPath, event.sender.id));
+    });
+
+  handle("sessions:replaceExternal", (event: IpcMainInvokeEvent, projectPath: string) => {
+      if (typeof projectPath !== "string" || !projectPath.trim()) {
+        throw new Error("Project path is required");
+      }
+      return replaceExternalSessionRuntime(requireSessionOwner(projectPath, event.sender.id));
     });
 
   handle(

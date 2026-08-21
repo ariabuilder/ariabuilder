@@ -1,7 +1,12 @@
 import { execFile, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { RuntimeStatus } from "../shared/types";
+import type {
+  ExternalPreview,
+  RuntimeAuthoringState,
+  RuntimeRecoveryAction,
+  RuntimeStatus,
+} from "../shared/types";
 import { hasNodeModules } from "./deps";
 import { canonicalDirectory } from "./pathSafety";
 import { resolveLocalAstroCommand } from "./astroCli";
@@ -38,6 +43,9 @@ export type RuntimeSnapshot = {
   markersPresent: boolean | null;
   /** Non-fatal warning for Composer (foreign server, missing kernel, …). */
   composerWarning: string | null;
+  authoringState: RuntimeAuthoringState;
+  recoveryAction: RuntimeRecoveryAction;
+  externalPreview: ExternalPreview | null;
 };
 
 type RuntimeProcess = ChildProcess;
@@ -73,6 +81,7 @@ const PROBE_READY_TIMEOUT_MS = 20_000;
 const PROBE_HEALTH_TIMEOUT_MS = 8_000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 const ADOPTED_WATCH_MS = 2_000;
+const ADOPT_RETRY_MS = 1_500;
 const LOG_LIMIT = 120;
 const PREVIEW_URL_RE =
   /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(\d+)/gi;
@@ -138,16 +147,54 @@ export function isAriaRuntimeCommand(command: string): boolean {
 }
 
 async function processCommand(pid: number): Promise<string> {
-  if (process.platform === "win32") return "";
   return new Promise((resolve) => {
-    execFile("ps", ["-p", String(pid), "-o", "command="], (error, stdout) => {
+    const command = process.platform === "win32" ? "powershell.exe" : "ps";
+    const args = process.platform === "win32"
+      ? [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `$process = Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\"; if ($process) { $process.CommandLine }`,
+        ]
+      : ["-p", String(pid), "-o", "command="];
+    execFile(command, args, { windowsHide: true }, (error, stdout) => {
       resolve(error ? "" : stdout.trim());
     });
   });
 }
 
+function normalizedCommandPath(value: string): string {
+  const normalized = value.replace(/\\/g, "/").replace(/["']/g, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+export function commandBelongsToProjectAstro(command: string, astroEntry: string): boolean {
+  if (!command.trim() || !astroEntry.trim()) return false;
+  return normalizedCommandPath(command).includes(normalizedCommandPath(astroEntry));
+}
+
+/** Detect the exact option in the project-local Astro CLI without loading user config. */
+export function astroCliSupportsIgnoreLock(root: string): boolean {
+  const packageRoot = path.join(root, "node_modules", "astro");
+  const candidates = [
+    path.join(packageRoot, "dist", "cli", "dev", "index.js"),
+    path.join(packageRoot, "dist", "cli", "index.js"),
+    path.join(packageRoot, "astro.js"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const source = fs.readFileSync(candidate, "utf8");
+      if (source.includes("ignore-lock") || source.includes("ignoreLock")) return true;
+    } catch {
+      // Astro releases move CLI files. Check the next known location.
+    }
+  }
+  return false;
+}
+
 async function isAriaOwnedRuntime(root: string, pid: number): Promise<boolean> {
-  if (readRuntimeOwner(root)?.pid === pid) return true;
+  const owner = readRuntimeOwner(root);
+  if (owner?.pid !== pid) return false;
   return isAriaRuntimeCommand(await processCommand(pid));
 }
 
@@ -198,6 +245,17 @@ function readDevLock(root: string): DevLock | null {
   } catch {
     return null;
   }
+}
+
+export function externalPreviewMatchesLock(
+  expected: ExternalPreview,
+  actual: ExternalPreview | null,
+): boolean {
+  return Boolean(
+    actual &&
+    actual.pid === expected.pid &&
+    normalizePreviewUrl(actual.url) === normalizePreviewUrl(expected.url),
+  );
 }
 
 function extractPreviewUrl(text: string): string | null {
@@ -440,8 +498,13 @@ export class AstroRuntimeManager {
 
   public start(projectPath: string): Promise<RuntimeSnapshot> {
     const key = canonicalDirectory(projectPath);
-    if (!this.operations.has(key) && this.records.get(key)?.status === "live") {
-      return Promise.resolve(this.records.get(key)!);
+    const existing = this.records.get(key);
+    if (
+      !this.operations.has(key) &&
+      existing?.status === "live" &&
+      existing.authoringState === "ready"
+    ) {
+      return Promise.resolve(existing);
     }
     return this.enqueue(key, () => this.startInternal(key));
   }
@@ -464,6 +527,11 @@ export class AstroRuntimeManager {
   public async restart(projectPath: string): Promise<RuntimeSnapshot> {
     await this.stop(projectPath);
     return this.start(projectPath);
+  }
+
+  public replaceExternal(projectPath: string): Promise<RuntimeSnapshot> {
+    const key = canonicalDirectory(projectPath);
+    return this.enqueue(key, () => this.replaceExternalInternal(key));
   }
 
   public async stopAll(): Promise<void> {
@@ -495,6 +563,60 @@ export class AstroRuntimeManager {
     return this.runs.get(root) === run;
   }
 
+  private async replaceExternalInternal(root: string): Promise<RuntimeSnapshot> {
+    const record = this.records.get(root);
+    const expected = record?.externalPreview;
+    if (
+      !record ||
+      record.authoringState !== "blocked_external" ||
+      record.recoveryAction !== "replace_external" ||
+      !expected
+    ) {
+      throw new Error("No external Astro preview is waiting to be replaced.");
+    }
+
+    const lock = readDevLock(root);
+    if (!externalPreviewMatchesLock(expected, lock) || !lock || !isPidAlive(lock.pid)) {
+      throw new Error("The existing Astro preview changed. Retry preview detection before replacing it.");
+    }
+
+    const command = resolveLocalAstroCommand(root, []);
+    const observedCommand = await processCommand(lock.pid);
+    if (!command || !commandBelongsToProjectAstro(observedCommand, command.entry)) {
+      throw new Error("Aria could not verify that the existing process belongs to this project's Astro installation.");
+    }
+
+    const validationController = new AbortController();
+    const [reachable, bridge, markers] = await Promise.all([
+      probeHttpStable(`${lock.url}/`, validationController.signal),
+      probeAriaBridge(lock.url, validationController.signal),
+      probeAriaMarkers(lock.url, validationController.signal),
+    ]);
+    if (!reachable) {
+      throw new Error("The existing Astro preview stopped. Retry preview detection.");
+    }
+    if (bridge.compatible && markers) {
+      throw new Error("The existing preview now supports Composer. Retry preview detection instead of replacing it.");
+    }
+
+    record.logs.push(`[aria:composer] Replacing confirmed external preview ${lock.url} (PID ${lock.pid}).`);
+    this.emit(record);
+    await killProcessTree(null, lock.pid);
+    if (isPidAlive(lock.pid)) {
+      throw new Error("The existing Astro preview did not stop.");
+    }
+
+    const previousRun = this.runs.get(root);
+    if (previousRun) {
+      previousRun.cancelled = true;
+      previousRun.controller.abort();
+      await this.cleanupRun(root, previousRun);
+    }
+    record.externalPreview = null;
+    record.recoveryAction = "none";
+    return this.startInternal(root);
+  }
+
   /** True when another live session already owns this preview URL. */
   private isPreviewUrlClaimedByOther(root: string, url: string): boolean {
     const normalized = normalizePreviewUrl(url);
@@ -507,10 +629,15 @@ export class AstroRuntimeManager {
   }
 
   private async startInternal(root: string): Promise<RuntimeSnapshot> {
+    const startupStartedAt = Date.now();
     const previousRun = this.runs.get(root);
     if (previousRun?.cleanup) await previousRun.cleanup;
     const existing = this.records.get(root);
-    if (existing?.status === "live" && !this.runs.get(root)?.cancelled) return existing;
+    if (
+      existing?.status === "live" &&
+      existing.authoringState === "ready" &&
+      !this.runs.get(root)?.cancelled
+    ) return existing;
 
     if (!hasNodeModules(root)) {
       return this.needsInstall(
@@ -541,6 +668,9 @@ export class AstroRuntimeManager {
       logs: [],
       markersPresent: null,
       composerWarning: null,
+      authoringState: "starting",
+      recoveryAction: "none",
+      externalPreview: null,
     };
     this.records.set(root, record);
     this.emit(record);
@@ -572,8 +702,7 @@ export class AstroRuntimeManager {
       // Ephemeral marker config under node_modules/.aria/ (never mutates user config).
       const markerCfg = writeMarkerConfig(root);
       if (!markerCfg) {
-        record.composerWarning =
-          "Aria marker config could not be written — design-mode selection may be unavailable.";
+        throw new Error("Aria could not prepare the Composer preview controls.");
       }
       if (run.cancelled || !this.isCurrent(root, run)) return this.stopped(root);
 
@@ -581,7 +710,7 @@ export class AstroRuntimeManager {
       // After a preference write, Astro may briefly restart — retry briefly.
       const isForeignUrl = (url: string) =>
         this.isPreviewUrlClaimedByOther(root, url);
-      const adoptDeadline = Date.now();
+      const adoptDeadline = Date.now() + ADOPT_RETRY_MS;
       let adopted: { url: string; pid: number } | null = null;
       while (true) {
         adopted = await tryAdoptExisting(
@@ -595,19 +724,14 @@ export class AstroRuntimeManager {
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
       if (run.cancelled || !this.isCurrent(root, run)) return this.stopped(root);
+      let parallelExternal: ExternalPreview | null = null;
       if (adopted) {
-        const [bridge, ariaOwned] = await Promise.all([
+        const [bridge, hasMarkers, ariaOwned] = await Promise.all([
           probeAriaBridge(adopted.url, run.controller.signal),
+          probeAriaMarkers(adopted.url, run.controller.signal),
           isAriaOwnedRuntime(root, adopted.pid),
         ]);
-        if (!bridge.compatible && ariaOwned) {
-          record.logs.push(
-            `[aria:composer] Replacing stale Aria preview bridge ${bridge.bridgeId ?? "unknown"}.`,
-          );
-          await killProcessTree(null, adopted.pid);
-          removeRuntimeOwner(root, adopted.pid);
-          adopted = null;
-        } else {
+        if (bridge.compatible && hasMarkers) {
           run.adoptedPid = adopted.pid;
           run.ownership = ariaOwned ? "spawned" : "observed";
           record.status = "live";
@@ -615,18 +739,45 @@ export class AstroRuntimeManager {
           record.previewUrl = adopted.url;
           record.previewOwnership = ariaOwned ? "aria" : "external";
           record.error = null;
-          const hasMarkers = await probeAriaMarkers(
-            adopted.url,
-            run.controller.signal,
+          record.markersPresent = true;
+          record.composerWarning = null;
+          record.authoringState = "ready";
+          record.recoveryAction = "none";
+          record.externalPreview = null;
+          record.logs.push(
+            `[aria:perf] Composer preview bridge ready in ${Date.now() - startupStartedAt}ms.`,
           );
-          record.markersPresent = hasMarkers && bridge.compatible;
-          if (!record.markersPresent) {
-            record.composerWarning = bridge.bridgeId
-              ? `Preview bridge ${bridge.bridgeId} is incompatible with ${ARIA_BRIDGE_ID}. Restart the preview from Aria.`
-              : FOREIGN_SERVER_WARNING;
-            record.logs.push(`[aria:composer] ${record.composerWarning}`);
-          }
           this.watchPreview(root, run, adopted.url);
+          this.emit(record);
+          return record;
+        }
+        if (ariaOwned) {
+          record.logs.push(
+            `[aria:composer] Replacing stale Aria preview bridge ${bridge.bridgeId ?? "unknown"}.`,
+          );
+          await killProcessTree(null, adopted.pid);
+          removeRuntimeOwner(root, adopted.pid);
+          adopted = null;
+        } else if (astroCliSupportsIgnoreLock(root)) {
+          parallelExternal = adopted;
+          record.logs.push(
+            `[aria:composer] Existing preview ${adopted.url} remains running. Starting an instrumented Composer preview alongside it.`,
+          );
+        } else {
+          run.adoptedPid = adopted.pid;
+          run.ownership = "observed";
+          record.status = "failed";
+          record.live = false;
+          record.previewUrl = null;
+          record.previewOwnership = "external";
+          record.error =
+            "Another Astro preview is using this project. Replace it to enable Composer selection and editing.";
+          record.markersPresent = false;
+          record.composerWarning = null;
+          record.authoringState = "blocked_external";
+          record.recoveryAction = "replace_external";
+          record.externalPreview = adopted;
+          record.logs.push(`[aria:composer] ${FOREIGN_SERVER_WARNING}`);
           this.emit(record);
           return record;
         }
@@ -642,10 +793,9 @@ export class AstroRuntimeManager {
         "--clear-screen",
         "false",
       ];
-      if (markerCfg) {
-        // Astro resolves --config against cwd; relative path avoids ConfigNotFound.
-        spawnArgs.push("--config", markerCfg.configArg);
-      }
+      // Astro resolves --config against cwd; relative path avoids ConfigNotFound.
+      spawnArgs.push("--config", markerCfg.configArg);
+      if (parallelExternal) spawnArgs.push("--ignore-lock");
       const child = spawnElectronNode(spawnArgs, {
         cwd: root,
         env: projectProcessEnv(),
@@ -695,7 +845,12 @@ export class AstroRuntimeManager {
         root,
         () => record.logs.join("\n"),
         run.controller.signal,
-        isForeignUrl,
+        (url) =>
+          isForeignUrl(url) ||
+          Boolean(
+            parallelExternal &&
+            normalizePreviewUrl(url) === normalizePreviewUrl(parallelExternal.url),
+          ),
       );
       if (run.cancelled || !this.isCurrent(root, run)) return this.stopped(root);
 
@@ -721,23 +876,25 @@ export class AstroRuntimeManager {
       record.previewOwnership =
         run.ownership === "observed" ? "external" : "aria";
       record.error = null;
-      // Spawned with Aria marker config when write succeeded; still probe in case
-      // Astro attached to a pre-existing foreign server instead.
-      if (markerCfg) {
-        const [hasMarkers, bridge] = await Promise.all([
-          probeAriaMarkers(ready.url, run.controller.signal),
-          probeAriaBridge(ready.url, run.controller.signal),
-        ]);
-        record.markersPresent = hasMarkers && bridge.compatible;
-        if (!record.markersPresent) {
-          record.composerWarning = bridge.bridgeId
-            ? `Preview bridge ${bridge.bridgeId} is incompatible with ${markerCfg.bridgeId}. Restart the preview from Aria.`
-            : FOREIGN_SERVER_WARNING;
-          record.logs.push(`[aria:composer] ${record.composerWarning}`);
-        }
-      } else {
-        record.markersPresent = false;
+      const [hasMarkers, bridge] = await Promise.all([
+        probeAriaMarkers(ready.url, run.controller.signal),
+        probeAriaBridge(ready.url, run.controller.signal),
+      ]);
+      if (!hasMarkers || !bridge.compatible) {
+        throw new Error(
+          bridge.bridgeId
+            ? `Composer preview bridge ${bridge.bridgeId} is incompatible with ${markerCfg.bridgeId}.`
+            : "Composer preview started without Aria selection controls.",
+        );
       }
+      record.markersPresent = true;
+      record.composerWarning = null;
+      record.authoringState = "ready";
+      record.recoveryAction = "none";
+      record.externalPreview = null;
+      record.logs.push(
+        `[aria:perf] Composer preview bridge ready in ${Date.now() - startupStartedAt}ms.`,
+      );
       // No live child means we only know about an adopted/external server — poll it.
       if (!run.child) this.watchPreview(root, run, ready.url);
       this.emit(record);
@@ -772,6 +929,9 @@ export class AstroRuntimeManager {
       record.error = null;
       record.markersPresent = null;
       record.composerWarning = null;
+      record.authoringState = "stopped";
+      record.recoveryAction = "none";
+      record.externalPreview = null;
       this.emit(record);
     }
   }
@@ -787,6 +947,9 @@ export class AstroRuntimeManager {
       logs: [],
       markersPresent: null,
       composerWarning: null,
+      authoringState: "stopped" as const,
+      recoveryAction: "none" as const,
+      externalPreview: null,
     };
     record.status = "stopped";
     record.live = false;
@@ -795,6 +958,9 @@ export class AstroRuntimeManager {
     record.error = null;
     record.markersPresent = null;
     record.composerWarning = null;
+    record.authoringState = "stopped";
+    record.recoveryAction = "none";
+    record.externalPreview = null;
     this.records.set(root, record);
     this.emit(record);
     return record;
@@ -887,6 +1053,9 @@ export class AstroRuntimeManager {
       logs: [],
       markersPresent: null,
       composerWarning: null,
+      authoringState: "stopped" as const,
+      recoveryAction: "none" as const,
+      externalPreview: null,
     };
     record.status = "needs_install";
     record.live = false;
@@ -894,6 +1063,10 @@ export class AstroRuntimeManager {
     record.previewOwnership = null;
     record.error = error;
     record.markersPresent = null;
+    record.composerWarning = null;
+    record.authoringState = "stopped";
+    record.recoveryAction = "none";
+    record.externalPreview = null;
     this.records.set(root, record);
     this.emit(record);
     return record;
@@ -910,6 +1083,9 @@ export class AstroRuntimeManager {
       logs: [],
       markersPresent: null,
       composerWarning: null,
+      authoringState: "failed" as const,
+      recoveryAction: "retry" as const,
+      externalPreview: null,
     };
     record.status = "failed";
     record.live = false;
@@ -917,6 +1093,10 @@ export class AstroRuntimeManager {
     record.previewOwnership = null;
     record.error = error;
     record.markersPresent = null;
+    record.composerWarning = null;
+    record.authoringState = "failed";
+    record.recoveryAction = "retry";
+    record.externalPreview = null;
     this.records.set(root, record);
     this.emit(record);
     return record;

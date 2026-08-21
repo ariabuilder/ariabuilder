@@ -1,12 +1,29 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { constants as fsConstants, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { startExternalAstroPreview, stopProcessTree } from "./lib/external-astro-preview.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = mkdtempSync(path.join(tmpdir(), "aria-installed-smoke-"));
-const fixture = path.join(root, "tests", "fixtures", "astro-smoke");
+const fixtureSource = path.join(root, "tests", "fixtures", "astro-smoke");
+const fixture = path.join(scratch, "astro-smoke");
+
+cpSync(fixtureSource, fixture, {
+  recursive: true,
+  mode: fsConstants.COPYFILE_FICLONE,
+  filter(source) {
+    const relative = path.relative(fixtureSource, source).replace(/\\/g, "/");
+    if (!relative) return true;
+    return ![
+      ".astro",
+      ".aria",
+      "src/aria",
+      "src/middleware.ts",
+    ].some((generated) => relative === generated || relative.startsWith(`${generated}/`));
+  },
+});
 
 function firstRelease(suffix) {
   const releaseDir = path.join(root, "release");
@@ -20,6 +37,8 @@ function firstRelease(suffix) {
 let executable;
 let resourcesDir;
 let mountedVolume;
+let externalPreview;
+
 try {
   if (process.platform === "darwin") {
     const dmg = firstRelease(".dmg");
@@ -56,6 +75,7 @@ try {
 
   if (!existsSync(executable)) throw new Error(`Installed executable missing: ${executable}`);
   if (!resourcesDir) throw new Error("Installed resources directory could not be resolved");
+  externalPreview = (await startExternalAstroPreview(fixture)).child;
   execFileSync(process.execPath, [path.join(root, "scripts", "smoke-packaged.mjs")], {
     cwd: root,
     env: {
@@ -63,11 +83,13 @@ try {
       ARIA_PACKAGED_EXECUTABLE: executable,
       ARIA_PACKAGED_RESOURCES_DIR: resourcesDir,
       ARIA_SMOKE_OPEN: fixture,
+      ARIA_SMOKE_EXTERNAL_PID: String(externalPreview.pid),
     },
     stdio: "inherit",
   });
   console.log("smoke-installed: ok");
 } finally {
+  stopProcessTree(externalPreview);
   if (mountedVolume) {
     try { execFileSync("hdiutil", ["detach", mountedVolume, "-force"]); } catch {}
   }

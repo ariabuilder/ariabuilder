@@ -14,6 +14,10 @@ describe("Composer design client computed styles", () => {
       pretendToBeVisual: true,
     })
     const { window } = dom
+    Object.defineProperty(window.navigator, "platform", {
+      value: "Linux x86_64",
+      configurable: true,
+    })
     const scrollTo = vi.fn()
     Object.defineProperty(window, "scrollX", { value: 9, configurable: true })
     Object.defineProperty(window, "scrollY", { value: 321, configurable: true })
@@ -34,6 +38,7 @@ describe("Composer design client computed styles", () => {
     window.eval(DESIGN_CLIENT_SOURCE)
     window.document.dispatchEvent(new window.Event("DOMContentLoaded"))
     await new Promise((resolve) => window.setTimeout(resolve, 0))
+    expect(window.document.getElementById("aria-transient-scrollbars")).not.toBeNull()
     window.dispatchEvent(new window.MessageEvent("message", {
       source: asMessageEventSource(window),
       data: { type: ARIA_MSG.reconcile, revision: 8, paths: ["0"] },

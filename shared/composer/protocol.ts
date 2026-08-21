@@ -1,5 +1,5 @@
 /**
- * Composer preview postMessage protocol v11 (`aria:` prefix).
+ * Composer preview postMessage protocol v12 (`aria:` prefix).
  *
  * Site iframe → host: geometry, interaction, viewport, reconcile results
  * Host → site iframe: tracking, reveal, direct patches, reconciliation
@@ -8,9 +8,9 @@
  * origin (localhost preview) and message shape.
  */
 
-export const ARIA_PROTOCOL_VERSION = 11 as const;
+export const ARIA_PROTOCOL_VERSION = 12 as const;
 /** Update whenever a preview bridge build is no longer host-compatible. */
-export const ARIA_BRIDGE_ID = "aria-composer-bridge-v11.4" as const;
+export const ARIA_BRIDGE_ID = "aria-composer-bridge-v12.0" as const;
 export const ARIA_BRIDGE_HEALTH_PATH = "/__aria/bridge-health" as const;
 
 export const ARIA_MSG = {
@@ -85,6 +85,8 @@ export type AriaReadyMessage = {
 
 export type AriaRectsMessage = {
   type: typeof ARIA_MSG.rects;
+  /** Echoes the host track request that owns this geometry snapshot. */
+  trackingRevision: number;
   rects: Record<string, AriaRect[] | null>;
   classes: Record<string, string[][]>;
   /** Outermost-to-innermost rendered owner markers for repeated/nested instances. */
@@ -255,6 +257,8 @@ export type AriaBridgePingMessage = {
 
 export type AriaTrackMessage = {
   type: typeof ARIA_MSG.track;
+  /** Monotonic host revision used to reject geometry from an older scope. */
+  trackingRevision: number;
   paths: string[];
   scope?: string;
 };
@@ -340,6 +344,7 @@ export function isAriaProtocolMessage(
     urls?: unknown;
     px?: unknown;
     height?: unknown;
+    trackingRevision?: unknown;
     revision?: unknown;
     patches?: unknown;
     paths?: unknown;
@@ -411,8 +416,20 @@ export function isAriaProtocolMessage(
   if (type === ARIA_MSG.pageHeight) {
     return Number.isFinite(message.height);
   }
+  if (type === ARIA_MSG.track) {
+    return (
+      Number.isInteger(message.trackingRevision) &&
+      Number(message.trackingRevision) >= 0 &&
+      Array.isArray(message.paths)
+    );
+  }
+  if (type === ARIA_MSG.rects) {
+    return (
+      Number.isInteger(message.trackingRevision) &&
+      Number(message.trackingRevision) >= 0
+    );
+  }
   return (
-    type === ARIA_MSG.rects ||
     type === ARIA_MSG.hover ||
     type === ARIA_MSG.click ||
     type === ARIA_MSG.open ||
@@ -430,7 +447,6 @@ export function isAriaProtocolMessage(
     type === ARIA_MSG.displayOptions ||
     type === ARIA_MSG.designInteraction ||
     type === ARIA_MSG.popoverPreview ||
-    type === ARIA_MSG.track ||
     type === ARIA_MSG.scrollTo ||
     type === ARIA_MSG.viewport ||
     type === ARIA_MSG.restoreViewport

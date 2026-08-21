@@ -13,6 +13,11 @@ import {
   LEGACY_COMPOSER_IMAGE_PLACEHOLDER_SRC,
 } from "../../shared/composer/ariaPrimitives"
 
+type RectMessage = {
+  trackingRevision?: number
+  rects?: Record<string, Array<{ x: number; y: number; w: number; h: number }> | null>
+}
+
 describe("Composer design client computed styles", () => {
   it("opens and closes the real native popover for Design authoring", async () => {
     const dom = new JSDOM(`<!doctype html><html><body><button id="trigger" popovertarget="menu">Open</button><div id="menu" popover>Content</div></body></html>`, {
@@ -208,6 +213,218 @@ describe("Composer design client computed styles", () => {
       path: "0.0",
       occurrence: 1,
     })))
+    dom.window.close()
+  })
+
+  it("recovers scoped rectangles from stamped DOM when the region map has no entry", async () => {
+    const dom = new JSDOM(`<!doctype html><html><body>
+      <section data-aria-p="src/components/Card.astro|0" data-aria-occurrence="0"></section>
+      <section data-aria-p="src/components/Card.astro|0" data-aria-occurrence="1"></section>
+    </body></html>`, {
+      url: "http://127.0.0.1:4321/#aria-design",
+      runScripts: "dangerously",
+      pretendToBeVisual: true,
+    })
+    const { window } = dom
+    const sections = [...window.document.querySelectorAll<HTMLElement>("section")]
+    sections.forEach((section, occurrence) => {
+      const left = occurrence === 0 ? 10 : 110
+      Object.defineProperty(section, "getBoundingClientRect", {
+        configurable: true,
+        value: () => ({
+          x: left,
+          y: 20,
+          left,
+          top: 20,
+          right: left + 80,
+          bottom: 60,
+          width: 80,
+          height: 40,
+          toJSON: () => ({}),
+        }),
+      })
+    })
+    const rectMessages: RectMessage[] = []
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === ARIA_MSG.rects) rectMessages.push(event.data)
+    })
+
+    window.eval(DESIGN_CLIENT_SOURCE)
+    window.document.dispatchEvent(new window.Event("DOMContentLoaded"))
+    window.dispatchEvent(new window.MessageEvent("message", {
+      source: asMessageEventSource(window),
+      data: {
+        type: ARIA_MSG.track,
+        trackingRevision: 7,
+        paths: ["src/components/Card.astro|0"],
+        scope: "src/components/Card.astro|",
+      },
+    }))
+
+    await vi.waitFor(() => {
+      expect(rectMessages.at(-1)).toMatchObject({ trackingRevision: 7 })
+      expect(rectMessages.at(-1)?.rects?.["src/components/Card.astro|0"])
+        .toEqual([
+          { x: 10, y: 20, w: 80, h: 40 },
+          { x: 110, y: 20, w: 80, h: 40 },
+        ])
+    })
+    dom.window.close()
+  })
+
+  it("remeasures the active track once layout settles", async () => {
+    const dom = new JSDOM(`<!doctype html><html><body>
+      <div data-aria-p="0" data-aria-occurrence="0"></div>
+    </body></html>`, {
+      url: "http://127.0.0.1:4321/#aria-design",
+      runScripts: "dangerously",
+      pretendToBeVisual: true,
+    })
+    const { window } = dom
+    let width = 0
+    const target = window.document.querySelector<HTMLElement>("div")!
+    Object.defineProperty(target, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 12,
+        y: 18,
+        left: 12,
+        top: 18,
+        right: 12 + width,
+        bottom: width ? 48 : 18,
+        width,
+        height: width ? 30 : 0,
+        toJSON: () => ({}),
+      }),
+    })
+    const rectMessages: RectMessage[] = []
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === ARIA_MSG.rects) rectMessages.push(event.data)
+    })
+
+    window.eval(DESIGN_CLIENT_SOURCE)
+    window.document.dispatchEvent(new window.Event("DOMContentLoaded"))
+    window.dispatchEvent(new window.MessageEvent("message", {
+      source: asMessageEventSource(window),
+      data: {
+        type: ARIA_MSG.track,
+        trackingRevision: 3,
+        paths: ["0"],
+        scope: "",
+      },
+    }))
+    width = 120
+
+    await vi.waitFor(() => {
+      expect(rectMessages.some((message) => message.rects?.["0"] === null)).toBe(true)
+      expect(rectMessages.at(-1)).toMatchObject({ trackingRevision: 3 })
+      expect(rectMessages.at(-1)?.rects?.["0"]?.[0])
+        .toEqual({ x: 12, y: 18, w: 120, h: 30 })
+    })
+    dom.window.close()
+  })
+
+  it("collects markers inserted after the bridge starts", async () => {
+    const dom = new JSDOM(`<!doctype html><html><body>
+      <template data-aria-s="0"></template><main></main><template data-aria-e="0"></template>
+    </body></html>`, {
+      url: "http://127.0.0.1:4321/#aria-design",
+      runScripts: "dangerously",
+      pretendToBeVisual: true,
+    })
+    const { window } = dom
+    const rectMessages: RectMessage[] = []
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === ARIA_MSG.rects) rectMessages.push(event.data)
+    })
+    window.eval(DESIGN_CLIENT_SOURCE)
+    window.document.dispatchEvent(new window.Event("DOMContentLoaded"))
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+
+    window.dispatchEvent(new window.MessageEvent("message", {
+      source: asMessageEventSource(window),
+      data: {
+        type: ARIA_MSG.track,
+        trackingRevision: 9,
+        paths: ["src/components/Late.astro|0"],
+        scope: "src/components/Late.astro|",
+      },
+    }))
+    await vi.waitFor(() => {
+      expect(rectMessages.at(-1)).toMatchObject({ trackingRevision: 9 })
+      expect(rectMessages.at(-1)?.rects?.["src/components/Late.astro|0"]).toBeNull()
+    })
+
+    const start = window.document.createElement("template")
+    start.setAttribute("data-aria-s", "src/components/Late.astro|0")
+    const section = window.document.createElement("section")
+    Object.defineProperty(section, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 25,
+        y: 35,
+        left: 25,
+        top: 35,
+        right: 225,
+        bottom: 95,
+        width: 200,
+        height: 60,
+        toJSON: () => ({}),
+      }),
+    })
+    const end = window.document.createElement("template")
+    end.setAttribute("data-aria-e", "src/components/Late.astro|0")
+    window.document.body.append(start, section, end)
+
+    await vi.waitFor(() => {
+      expect(rectMessages.at(-1)).toMatchObject({ trackingRevision: 9 })
+      expect(rectMessages.at(-1)?.rects?.["src/components/Late.astro|0"]?.[0])
+        .toEqual({ x: 25, y: 35, w: 200, h: 60 })
+    })
+    expect(section.getAttribute("data-aria-p")).toBe("src/components/Late.astro|0")
+    dom.window.close()
+  })
+
+  it("does not emit a queued snapshot for an obsolete tracking revision", async () => {
+    const dom = new JSDOM(`<!doctype html><html><body>
+      <div data-aria-p="0" data-aria-occurrence="0"></div>
+      <div data-aria-p="1" data-aria-occurrence="0"></div>
+    </body></html>`, {
+      url: "http://127.0.0.1:4321/#aria-design",
+      runScripts: "dangerously",
+      pretendToBeVisual: true,
+    })
+    const { window } = dom
+    const rectMessages: RectMessage[] = []
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === ARIA_MSG.rects) rectMessages.push(event.data)
+    })
+    window.eval(DESIGN_CLIENT_SOURCE)
+    window.document.dispatchEvent(new window.Event("DOMContentLoaded"))
+
+    const sendTrack = (trackingRevision: number, path: string) => {
+      window.dispatchEvent(new window.MessageEvent("message", {
+        source: asMessageEventSource(window),
+        data: {
+          type: ARIA_MSG.track,
+          trackingRevision,
+          paths: [path],
+          scope: "",
+        },
+      }))
+    }
+    sendTrack(1, "0")
+    sendTrack(2, "1")
+    await vi.waitFor(() => {
+      expect(rectMessages.some((message) => message.trackingRevision === 2)).toBe(true)
+    })
+    const firstRevisionTwo = rectMessages.findIndex((message) => message.trackingRevision === 2)
+    await new Promise((resolve) => window.setTimeout(resolve, 30))
+
+    expect(firstRevisionTwo).toBeGreaterThanOrEqual(0)
+    expect(rectMessages.slice(firstRevisionTwo).every((message) =>
+      message.trackingRevision === 2,
+    )).toBe(true)
     dom.window.close()
   })
 

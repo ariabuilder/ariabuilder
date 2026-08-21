@@ -89,6 +89,34 @@ describe("project trust", () => {
     expect(isProjectTrusted(userData, project)).toBe(false);
   });
 
+  it("keeps trust when only the filesystem device identifier changes", () => {
+    const { userData, project } = fixture();
+    trustProject(userData, project, "user-approved");
+    const file = path.join(userData, "project-trust.json");
+    const store = JSON.parse(fs.readFileSync(file, "utf8")) as {
+      projects: Array<{ identity: { dev?: string } }>;
+    };
+
+    expect(store.projects[0]?.identity.dev).toBeTypeOf("string");
+    store.projects[0]!.identity.dev = `${store.projects[0]!.identity.dev}-drifted`;
+    fs.writeFileSync(file, JSON.stringify(store));
+    expect(isProjectTrusted(userData, project)).toBe(true);
+  });
+
+  it("rejects a changed inode when device and birth identity still match", () => {
+    const { userData, project } = fixture();
+    trustProject(userData, project, "user-approved");
+    const file = path.join(userData, "project-trust.json");
+    const store = JSON.parse(fs.readFileSync(file, "utf8")) as {
+      projects: Array<{ identity: { ino?: string } }>;
+    };
+
+    expect(store.projects[0]?.identity.ino).toBeTypeOf("string");
+    store.projects[0]!.identity.ino = `${store.projects[0]!.identity.ino}-changed`;
+    fs.writeFileSync(file, JSON.stringify(store));
+    expect(isProjectTrusted(userData, project)).toBe(false);
+  });
+
   it("fails closed for v1 and incomplete v2 trust records", () => {
     const { userData, project } = fixture();
     trustProject(userData, project, "user-approved");

@@ -84,6 +84,26 @@ describe("composer marker config", () => {
     expect(ARIA_MSG.syncMotionAssets).toBe("aria:sync-motion-assets");
     expect(ARIA_MSG.syncFontStylesheet).toBe("aria:sync-font-stylesheet");
     expect(isAriaIframeToHostMessage({ type: "avb:rects" })).toBe(false);
+    expect(isAriaProtocolMessage({
+      type: ARIA_MSG.track,
+      trackingRevision: 4,
+      paths: ["src/components/Card.astro|0"],
+    })).toBe(true);
+    expect(isAriaProtocolMessage({
+      type: ARIA_MSG.track,
+      paths: ["src/components/Card.astro|0"],
+    })).toBe(false);
+    expect(isAriaIframeToHostMessage({
+      type: ARIA_MSG.rects,
+      trackingRevision: 4,
+      rects: {},
+      classes: {},
+    })).toBe(true);
+    expect(isAriaIframeToHostMessage({
+      type: ARIA_MSG.rects,
+      rects: {},
+      classes: {},
+    })).toBe(false);
     expect(isAriaProtocolMessage({ type: ARIA_MSG.bridgePing, frameToken: "frame-a" })).toBe(true);
     expect(isAriaProtocolMessage({ type: ARIA_MSG.bridgePing })).toBe(false);
     expect(isAriaProtocolMessage({ type: ARIA_MSG.popoverPreview, targetId: "menu", open: true })).toBe(true);

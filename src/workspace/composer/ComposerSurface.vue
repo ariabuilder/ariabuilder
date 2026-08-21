@@ -135,6 +135,10 @@ import { applyProjectLocaleToRoute } from "../../../shared/localization"
 import { waitForComposerAuthoringPreview } from "@/lib/composerAuthoringPreview"
 import { useComposerOptions } from "./chrome/useComposerOptions"
 import { provideComposerTranslations } from "./useComposerTranslations"
+import {
+  createTransientScrollbarController,
+  shouldUseTransientScrollbars,
+} from "@/lib/transientScrollbars"
 
 const props = defineProps<{
   projectPath: string
@@ -150,6 +154,15 @@ const props = defineProps<{
   previewIsolatedDevice?: DevicePreview | null
   agentShellContext?: AgentShellContext
 }>()
+
+const usesTransientScrollbars = shouldUseTransientScrollbars()
+const transientScrollbarController = createTransientScrollbarController()
+
+function onComposerScroll(event: Event) {
+  if (usesTransientScrollbars && event.target instanceof Element) {
+    transientScrollbarController.activate(event.target)
+  }
+}
 
 const emit = defineEmits<{
   "exit-standalone": []
@@ -195,8 +208,6 @@ provideComposerTranslations({
   activeLocale: activeTranslationLocale,
   refresh: refreshTranslationCatalogs,
 })
-
-watch(() => props.projectPath, () => { void refreshTranslationCatalogs() }, { immediate: true })
 
 const beacon = provideComposerBeacon()
 provideComposerModeNavigation({ openCode: () => void onSurfaceMode("code") })
@@ -2149,6 +2160,7 @@ onUnmounted(() => {
   unregisterDocumentDirty?.()
   unregisterDocumentDirty = null
   window.removeEventListener("keydown", onKeyDown)
+  transientScrollbarController.dispose()
   void flushSave().catch(() => {
     /* ignore on teardown */
   })
@@ -2159,8 +2171,10 @@ onUnmounted(() => {
   <div
     class="flex h-full min-h-0 min-w-0 flex-1"
     data-aria-composer-surface
+    :data-aria-transient-scrollbars="usesTransientScrollbars ? '' : undefined"
     :data-preview-mode="surfaceMode"
     :data-drilling="editStack.isDrilling.value ? '1' : undefined"
+    @scroll.capture="onComposerScroll"
   >
     <p
       class="sr-only"

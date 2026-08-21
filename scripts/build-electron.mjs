@@ -15,14 +15,17 @@ fs.mkdirSync(outdir, { recursive: true });
 
 if (!composerKernelOnly) {
   await esbuild.build({
-    entryPoints: [path.join(root, "electron/main.ts")],
+    entryPoints: {
+      main: path.join(root, "electron/main.ts"),
+      "translation-catalog-worker": path.join(root, "electron/translationCatalogWorker.ts"),
+    },
     bundle: true,
     platform: "node",
     target: "node20",
     format: "esm",
     splitting: true,
     outdir,
-    entryNames: "main",
+    entryNames: "[name]",
     chunkNames: "chunks/[name]-[hash]",
     outExtension: { ".js": ".mjs" },
     // Bundled CJS deps (e.g. @vercel/oidc via ai/@ai-sdk/gateway) call

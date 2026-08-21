@@ -59,9 +59,11 @@ function directoryIdentity(projectPath: string): DirectoryIdentity {
 
 function sameIdentity(a: DirectoryIdentity, b: DirectoryIdentity): boolean {
   if (a.birthtimeMs !== b.birthtimeMs) return false;
-  if (a.dev && a.ino && b.dev && b.ino) {
-    return a.dev === b.dev && a.ino === b.ino;
-  }
+  // Device identifiers can drift across macOS runtime or mount changes even
+  // when the directory itself has not changed. The canonical path, inode, and
+  // birth time still detect a replacement without invalidating saved trust for
+  // device-only drift.
+  if (a.ino && b.ino) return a.ino === b.ino;
   return !a.dev && !a.ino && !b.dev && !b.ino;
 }
 

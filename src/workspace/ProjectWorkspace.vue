@@ -74,6 +74,7 @@ async function loadProject(
   projectPath: string,
   options?: { preserveSession?: boolean },
 ) {
+  const startedAt = performance.now()
   const requestId = ++scanRequestId
   const preserveSession = options?.preserveSession ?? false
   const previousRoute = session.selectedRoute
@@ -131,6 +132,7 @@ async function loadProject(
   }
 
   applyDisplayName()
+  console.info(`[aria:perf] Workspace scan completed in ${Math.round(performance.now() - startedAt)}ms.`)
 }
 
 async function onRefreshScan() {
@@ -161,8 +163,14 @@ watch(
   },
 )
 
-stopProjectChanges = onProjectChange((projectPath) => {
+stopProjectChanges = onProjectChange((projectPath, change) => {
   if (projectPath !== session.root || disposed) return
+  if (
+    change.path &&
+    change.category &&
+    change.category !== "structure" &&
+    change.category !== "config"
+  ) return
   if (session.scanLoading) {
     dirtyWhileLoading = true
     return

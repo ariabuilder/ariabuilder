@@ -82,6 +82,7 @@ ${MORPHDOM_SOURCE}
   const MARKER_S = ${JSON.stringify(ARIA_MARKER_START)};
   const MARKER_E = ${JSON.stringify(ARIA_MARKER_END)};
   const PATH_ATTR = ${JSON.stringify(ARIA_PATH_ATTR)};
+  const OCCURRENCE_ATTR = "data-aria-occurrence";
   const MSG = {
     ready: ${JSON.stringify(ARIA_MSG.ready)},
     bridgePing: ${JSON.stringify(ARIA_MSG.bridgePing)},
@@ -190,6 +191,73 @@ ${MORPHDOM_SOURCE}
     return;
   }
 
+  const transientScrollbarsEnabled =
+    (/^(Win|Linux)/i.test(navigator.platform || "") ||
+      /\\b(Windows|Linux)\\b/i.test(navigator.userAgent || "")) &&
+    !(typeof matchMedia === "function" && matchMedia("(forced-colors: active)").matches);
+  const transientScrollbarStates = new Map();
+  const installTransientScrollbarStyles = () => {
+    if (!transientScrollbarsEnabled || document.getElementById("aria-transient-scrollbars")) return;
+    document.documentElement.setAttribute("data-aria-transient-scrollbars", "");
+    const style = document.createElement("style");
+    style.id = "aria-transient-scrollbars";
+    style.textContent = [
+      "@media (forced-colors: none) {",
+      "html[data-aria-transient-scrollbars], html[data-aria-transient-scrollbars] * { scrollbar-color: transparent transparent; scrollbar-width: thin; }",
+      "html[data-aria-transient-scrollbars][data-aria-scroll-active], html[data-aria-transient-scrollbars] [data-aria-scroll-active] { scrollbar-color: rgb(117 117 117) transparent; }",
+      "}",
+    ].join("\\n");
+    (document.head || document.documentElement).appendChild(style);
+  };
+  const showTransientScrollbar = (event) => {
+    if (!transientScrollbarsEnabled) return;
+    const element = event.target instanceof Element
+      ? event.target
+      : document.documentElement;
+    const previous = transientScrollbarStates.get(element);
+    if (previous) {
+      clearTimeout(previous.timer);
+      previous.animation?.cancel();
+    }
+    element.setAttribute("data-aria-scroll-active", "");
+    const state = { timer: 0, animation: null };
+    state.timer = window.setTimeout(() => {
+      const reducedMotion = typeof matchMedia === "function" &&
+        matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reducedMotion || typeof element.animate !== "function") {
+        element.removeAttribute("data-aria-scroll-active");
+        transientScrollbarStates.delete(element);
+        return;
+      }
+      let animation;
+      try {
+        animation = element.animate(
+          [
+            { scrollbarColor: "rgb(117 117 117) transparent" },
+            { scrollbarColor: "transparent transparent" },
+          ],
+          {
+            duration: 180,
+            easing: "cubic-bezier(0.2, 0, 0, 1)",
+            fill: "forwards",
+          },
+        );
+      } catch {
+        element.removeAttribute("data-aria-scroll-active");
+        transientScrollbarStates.delete(element);
+        return;
+      }
+      state.animation = animation;
+      element.removeAttribute("data-aria-scroll-active");
+      animation.onfinish = () => {
+        if (transientScrollbarStates.get(element)?.animation !== animation) return;
+        animation.cancel();
+        transientScrollbarStates.delete(element);
+      };
+    }, 650);
+    transientScrollbarStates.set(element, state);
+  };
+
   // Older Image primitives persisted a project-root URL that often did not exist.
   // Recover only after that exact legacy source fails; a real project file wins.
   window.addEventListener("error", (event) => {
@@ -254,6 +322,7 @@ ${MORPHDOM_SOURCE}
   const regions = new Map();
   let trackedPaths = [];
   let activeScope = "";
+  let trackingRevision = 0;
   const inScope = (p) =>
     activeScope ? p.startsWith(activeScope) : !p.includes("|");
   let lastHoverPath = undefined;
@@ -372,6 +441,7 @@ ${MORPHDOM_SOURCE}
       const p = s.getAttribute(MARKER_S);
       if (!p) continue;
       const run = [];
+      const occurrence = (regions.get(p) || []).length;
       for (let n = s.nextSibling; n; n = n.nextSibling) {
         if (
           n.nodeType === 1 &&
@@ -383,6 +453,7 @@ ${MORPHDOM_SOURCE}
         run.push(n);
         if (n.nodeType === 1 && n.tagName !== "TEMPLATE") {
           n.setAttribute(PATH_ATTR, p);
+          n.setAttribute(OCCURRENCE_ATTR, String(occurrence));
         }
       }
       if (!regions.has(p)) regions.set(p, []);
@@ -765,7 +836,12 @@ ${MORPHDOM_SOURCE}
     ),
     ...[...doc.querySelectorAll("head base, head link, head meta, head style, head title")]
       .filter((node) =>
-        !["aria-design-style", "aria-composer-preview-style", "aria-composer-display-style"].includes(node.id) &&
+        ![
+          "aria-design-style",
+          "aria-composer-preview-style",
+          "aria-composer-display-style",
+          "aria-transient-scrollbars",
+        ].includes(node.id) &&
         !node.hasAttribute("data-aria-motion-asset") &&
         !node.hasAttribute("data-aria-composer-font-asset") &&
         !node.hasAttribute("data-vite-dev-id") &&
@@ -1057,24 +1133,58 @@ ${MORPHDOM_SOURCE}
   };
 
   const rectsFromRegion = (p) => {
-    const runs = regions.get(p);
-    if (!runs) return null;
-    const out = [];
-    for (const run of runs) {
+    const runs = (regions.get(p) || []).filter((run) =>
+      run.some((node) => node?.isConnected),
+    );
+    if (runs.length) regions.set(p, runs);
+    else regions.delete(p);
+
+    // Group by the occurrence stamped during marker collection. This keeps
+    // multi-root components together and repeated instances separate even if
+    // reconciliation replaced a run and the in-memory array is incomplete.
+    const byOccurrence = new Map();
+    for (let index = 0; index < runs.length; index += 1) {
+      const run = runs[index];
+      const stampedOccurrence = Number.parseInt(
+        firstElement(run)?.getAttribute(OCCURRENCE_ATTR) || "",
+        10,
+      );
+      const occurrence = Number.isInteger(stampedOccurrence)
+        ? stampedOccurrence
+        : index;
       let acc = null;
       for (const n of run) acc = addNode(acc, n);
-      if (acc) out.push(toRect(acc));
+      if (acc) byOccurrence.set(occurrence, acc);
     }
-    if (runs.length === 1) {
-      let acc = runs[0].reduce(addNode, null);
-      for (const el of document.querySelectorAll(
-        "[" + PATH_ATTR + '="' + CSS.escape(p) + '"]',
-      )) {
-        acc = addNode(acc, el);
-      }
-      if (acc) return [toRect(acc)];
+
+    // Marker runs are an optimization, not the source of truth. Reconciliation
+    // or late DOM ownership can leave a connected stamped node without a live
+    // entry in the private map. Recover exact geometry from the DOM so opening
+    // a component never depends on whether that map has already seen it.
+    let fallbackOccurrence = byOccurrence.size
+      ? Math.max(...byOccurrence.keys()) + 1
+      : 0;
+    for (const el of document.querySelectorAll(
+      "[" + PATH_ATTR + '="' + CSS.escape(p) + '"]',
+    )) {
+      if (!el.isConnected) continue;
+      const stampedOccurrence = Number.parseInt(
+        el.getAttribute(OCCURRENCE_ATTR) || "",
+        10,
+      );
+      const occurrence = Number.isInteger(stampedOccurrence)
+        ? stampedOccurrence
+        : fallbackOccurrence++;
+      byOccurrence.set(
+        occurrence,
+        addNode(byOccurrence.get(occurrence) || null, el),
+      );
     }
-    return out.length ? out : null;
+    const recovered = [...byOccurrence.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, acc]) => acc && toRect(acc))
+      .filter(Boolean);
+    return recovered.length ? recovered : null;
   };
 
   const rectsFromAncestors = (p) => {
@@ -1141,7 +1251,13 @@ ${MORPHDOM_SOURCE}
       classes[p] = classesForPath(p);
       owners[p] = ownerChainsForPath(p);
     }
-    window.parent.postMessage({ type: MSG.rects, rects, classes, owners }, "*");
+    window.parent.postMessage({
+      type: MSG.rects,
+      trackingRevision,
+      rects,
+      classes,
+      owners,
+    }, "*");
   };
 
   const SCROLL_MARGIN = 24;
@@ -1325,7 +1441,10 @@ ${MORPHDOM_SOURCE}
     }
     window.addEventListener("scroll", queueRects, true);
     window.addEventListener("resize", queueRects);
-    new MutationObserver(queueRects).observe(
+    new MutationObserver(() => {
+      collectRegions();
+      queueRects();
+    }).observe(
       document.body || document.documentElement,
       {
         childList: true,
@@ -1334,6 +1453,14 @@ ${MORPHDOM_SOURCE}
         characterData: true,
       },
     );
+    if (typeof ResizeObserver === "function") {
+      const observer = new ResizeObserver(queueRects);
+      observer.observe(document.documentElement);
+    }
+    document.addEventListener("load", queueRects, true);
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(queueRects).catch(() => {});
+    }
     document.addEventListener("mousemove", (e) => {
       if (!designInteractive) return;
       const { path: p, occurrence } = nodeAt(targetAt(e), e.clientX, e.clientY);
@@ -1838,10 +1965,19 @@ ${MORPHDOM_SOURCE}
       previewPopoverTargetId = d.open ? d.targetId : null;
       queuePopoverPreview();
     }
-    if (d.type === MSG.track && Array.isArray(d.paths)) {
+    if (
+      d.type === MSG.track &&
+      Array.isArray(d.paths) &&
+      Number.isInteger(d.trackingRevision) &&
+      d.trackingRevision >= 0
+    ) {
       trackedPaths = d.paths;
       activeScope = typeof d.scope === "string" ? d.scope : "";
+      trackingRevision = d.trackingRevision;
       sendRects();
+      // Always sample once after layout has had a frame to settle. Further
+      // changes are event-driven by mutation, resize, media, and font hooks.
+      queueRects();
     }
     if (d.type === MSG.scrollTo && typeof d.path === "string") {
       scrollPathIntoView(
@@ -1958,6 +2094,7 @@ ${MORPHDOM_SOURCE}
   });
 
   const start = () => {
+    installTransientScrollbarStyles();
     applyConditionBranches();
     startOutlines();
     new MutationObserver(queuePopoverPreview).observe(document.documentElement, {
@@ -1967,6 +2104,7 @@ ${MORPHDOM_SOURCE}
       attributeFilter: ["id", "popover", "popovertarget"],
     });
     window.addEventListener("scroll", queueViewport, true);
+    window.addEventListener("scroll", showTransientScrollbar, true);
     window.addEventListener("pagehide", sendViewport);
     announceReady();
   };

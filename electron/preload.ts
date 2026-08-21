@@ -611,6 +611,7 @@ export type AriaSessionsApi = {
   start: (projectPath: string) => Promise<ProjectRuntimeSession>;
   stop: (projectPath: string) => Promise<ProjectRuntimeSession | null>;
   restart: (projectPath: string) => Promise<ProjectRuntimeSession>;
+  replaceExternal: (projectPath: string) => Promise<ProjectRuntimeSession>;
   installDeps: (projectPath: string) => Promise<ProjectRuntimeSession>;
   onUpdate: (handler: (session: ProjectRuntimeSession) => void) => () => void;
 };
@@ -1704,6 +1705,8 @@ const aria: AriaApi = {
     start: (projectPath) => ipcRenderer.invoke("sessions:start", projectPath),
     stop: (projectPath) => ipcRenderer.invoke("sessions:stop", projectPath),
     restart: (projectPath) => ipcRenderer.invoke("sessions:restart", projectPath),
+    replaceExternal: (projectPath) =>
+      ipcRenderer.invoke("sessions:replaceExternal", projectPath),
     installDeps: (projectPath) =>
       ipcRenderer.invoke("sessions:installDeps", projectPath),
     onUpdate: (handler) => {

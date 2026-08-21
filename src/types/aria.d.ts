@@ -867,6 +867,7 @@ export type AriaSessionsApi = {
   start: (projectPath: string) => Promise<ProjectRuntimeSession>;
   stop: (projectPath: string) => Promise<ProjectRuntimeSession | null>;
   restart: (projectPath: string) => Promise<ProjectRuntimeSession>;
+  replaceExternal: (projectPath: string) => Promise<ProjectRuntimeSession>;
   installDeps: (projectPath: string) => Promise<ProjectRuntimeSession>;
   onUpdate: (handler: (session: ProjectRuntimeSession) => void) => () => void;
 };

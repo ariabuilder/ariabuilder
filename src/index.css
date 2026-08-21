@@ -8,6 +8,21 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Windows and Linux use persistent classic scrollbars. Composer keeps their
+   thin gutter but reveals the thumb only while its scroll area is moving. */
+@media (forced-colors: none) {
+  [data-aria-composer-surface][data-aria-transient-scrollbars],
+  [data-aria-composer-surface][data-aria-transient-scrollbars] * {
+    scrollbar-color: transparent transparent;
+    scrollbar-width: thin;
+  }
+
+  [data-aria-composer-surface][data-aria-transient-scrollbars][data-aria-scroll-active],
+  [data-aria-composer-surface][data-aria-transient-scrollbars] [data-aria-scroll-active] {
+    scrollbar-color: rgb(117 117 117) transparent;
+  }
+}
+
 /* UI Zoom (interface scale) */
 @property --ui-zoom {
   syntax: "<number>";
