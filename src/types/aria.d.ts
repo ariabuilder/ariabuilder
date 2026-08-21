@@ -926,9 +926,7 @@ export type AriaTerminalApi = {
   ) => () => void;
 };
 
-export type CaptureRect = {
-  x: number;
-  y: number;
+export type CaptureViewport = {
   width: number;
   height: number;
 };
@@ -960,8 +958,10 @@ export type LayoutThumbReadyPayload = ComponentThumbReadyPayload;
 export type AriaThumbsApi = {
   capture: (opts: {
     projectPath: string;
+    baseUrl: string;
     route: string;
-    rect: CaptureRect;
+    viewport: CaptureViewport;
+    captureHeight: number;
     mtimeMs?: number | null;
   }) => Promise<ThumbCaptureResult>;
   getPage: (opts: {
