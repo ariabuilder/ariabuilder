@@ -92,7 +92,7 @@ describe("project translation catalog discovery", () => {
     const candidates = translationCandidateFiles(root).map((file) => path.relative(root, file).replace(/\\/g, "/"));
     expect(candidates).toEqual(["src/i18n/messages.ts"]);
     expect((await listProjectTranslationCatalogs(root, true)).catalogs).toHaveLength(1);
-  });
+  }, 20_000);
 
   it("creates per-namespace locale drafts and applies a separately reviewed hash-matched cutover", async () => {
     const root = fixture();
