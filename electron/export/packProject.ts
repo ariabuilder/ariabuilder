@@ -280,6 +280,7 @@ export async function packSiteExport(
   projectPath: string,
   selectionInput?: SiteExportSelectionInput,
 ): Promise<PackSiteExportResult> {
+  const startedAt = Date.now();
   const root = canonicalDirectory(projectPath);
   const resolved = resolveExportSelection(selectionInput);
   const { sections, mediaMode } = resolved;
@@ -479,6 +480,10 @@ export async function packSiteExport(
     compression: "DEFLATE",
     compressionOptions: { level: 6 },
   });
+
+  console.info(
+    `[aria:perf] Export packing completed in ${Date.now() - startedAt}ms with ${bytes.byteLength} bytes across ${pageCount + layoutCount + componentCount + mediaCount + cmsEntryCount} selected items.`,
+  );
 
   return {
     bytes,

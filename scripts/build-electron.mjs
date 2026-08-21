@@ -14,10 +14,24 @@ if (!composerKernelOnly) {
 fs.mkdirSync(outdir, { recursive: true });
 
 if (!composerKernelOnly) {
+  const external = [
+    "electron",
+    "node-pty",
+    "@astrojs/compiler",
+    "@astrojs/compiler/*",
+    "isomorphic-dompurify",
+    "jsdom",
+    "typescript",
+    "electron-updater",
+  ];
+  const banner = {
+    js: `import { createRequire as __ariaCreateRequire } from "node:module";
+const require = __ariaCreateRequire(import.meta.url);`,
+  };
+
   await esbuild.build({
     entryPoints: {
       main: path.join(root, "electron/main.ts"),
-      "translation-catalog-worker": path.join(root, "electron/translationCatalogWorker.ts"),
     },
     bundle: true,
     platform: "node",
@@ -30,26 +44,30 @@ if (!composerKernelOnly) {
     outExtension: { ".js": ".mjs" },
     // Bundled CJS deps (e.g. @vercel/oidc via ai/@ai-sdk/gateway) call
     // require("path"). Provide createRequire so those work under ESM.
-    banner: {
-      js: `import { createRequire as __ariaCreateRequire } from "node:module";
-const require = __ariaCreateRequire(import.meta.url);`,
-    },
+    banner,
     // The compiler loads astro.wasm relative to its own import.meta.url. It must
     // remain a real package import; bundling relocates that URL to main.mjs.
     // isomorphic-dompurify → jsdom reads default-stylesheet.css via __dirname;
     // bundling into ESM leaves __dirname undefined and breaks app load. TypeScript
     // also relies on its real CommonJS filename to locate lib files and probe the
     // filesystem, so keep its runtime package intact as well.
-    external: [
-      "electron",
-      "node-pty",
-      "@astrojs/compiler",
-      "@astrojs/compiler/*",
-      "isomorphic-dompurify",
-      "jsdom",
-      "typescript",
-      "electron-updater",
-    ],
+    external,
+    sourcemap: process.env.ARIA_SOURCEMAP === "1",
+    logLevel: "info",
+  });
+
+  // Keep the Node worker out of the main-process splitting graph. Otherwise a
+  // shared chunk can retain Electron-only imports that are unavailable inside
+  // worker_threads in a packaged app.
+  await esbuild.build({
+    entryPoints: [path.join(root, "electron/translationCatalogWorker.ts")],
+    bundle: true,
+    platform: "node",
+    target: "node20",
+    format: "esm",
+    outfile: path.join(outdir, "translation-catalog-worker.mjs"),
+    banner,
+    external,
     sourcemap: process.env.ARIA_SOURCEMAP === "1",
     logLevel: "info",
   });

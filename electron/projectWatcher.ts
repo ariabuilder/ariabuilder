@@ -161,13 +161,14 @@ export class ProjectWatcher {
         const name = filename?.toString();
         if (eventType !== "rename" || !name || !["src", "public", ".aria"].includes(name)) return;
         const directory = path.join(root, name);
-        try {
-          if (fs.statSync(directory).isDirectory()) {
-            if (process.platform === "win32") this.startRecursiveWatcher(directory, root);
-            else this.startFallbackTree(directory, root, 0);
+        if (process.platform === "win32") {
+          try {
+            if (fs.statSync(directory).isDirectory()) this.startRecursiveWatcher(directory, root);
+          } catch {
+            // A removed source root needs no watcher.
           }
-        } catch {
-          // A removed source root needs no watcher.
+        } else {
+          this.refreshFallbackTree(directory, root);
         }
       });
       watcher.on("error", (error) => {
@@ -238,12 +239,31 @@ export class ProjectWatcher {
         this.handleEvent(root, directory, eventType, filename, false);
       });
       watcher.on("error", () => {
-        watcher.close();
-        this.fallbackWatchers.delete(key);
+        if (this.fallbackWatchers.get(key) !== watcher) return;
+        this.removeFallbackTree(directory);
       });
       this.fallbackWatchers.set(key, watcher);
     } catch {
       // An inaccessible directory must not prevent the rest of the project watcher.
+    }
+  }
+
+  private removeFallbackTree(directory: string): void {
+    const key = path.resolve(directory);
+    const prefix = `${key}${path.sep}`;
+    for (const [watchedPath, watcher] of this.fallbackWatchers) {
+      if (watchedPath !== key && !watchedPath.startsWith(prefix)) continue;
+      watcher.close();
+      this.fallbackWatchers.delete(watchedPath);
+    }
+  }
+
+  private refreshFallbackTree(directory: string, root: string): void {
+    this.removeFallbackTree(directory);
+    try {
+      if (fs.statSync(directory).isDirectory()) this.startFallbackTree(directory, root, 0);
+    } catch {
+      // Deleted directories stay detached until a later parent rename recreates them.
     }
   }
 
@@ -269,13 +289,7 @@ export class ProjectWatcher {
     this.queueChange(classifyProjectChange(relative));
 
     if (!recursive && eventType === "rename") {
-      try {
-        if (fs.statSync(absolute).isDirectory()) {
-          this.startFallbackTree(absolute, root, 0);
-        }
-      } catch {
-        // Deleted paths need no replacement watcher.
-      }
+      this.refreshFallbackTree(absolute, root);
     }
   }
 

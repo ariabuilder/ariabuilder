@@ -259,6 +259,7 @@ function uniqueTerms(items: WordPressSourceItem[]): WordPressSourceTerm[] {
 }
 
 export async function parseWxrSource(input: string): Promise<WordPressSourceGraph> {
+  const startedAt = Date.now();
   const { XMLParser } = (await import("fast-xml-parser")) as {
     XMLParser: new (options?: Record<string, unknown>) => {
       parse: (input: string) => unknown;
@@ -369,7 +370,7 @@ export async function parseWxrSource(input: string): Promise<WordPressSourceGrap
     ),
   });
 
-  return {
+  const graph: WordPressSourceGraph = {
     sourceType: "wxr",
     site: {
       title: textValue(channel.title),
@@ -394,6 +395,10 @@ export async function parseWxrSource(input: string): Promise<WordPressSourceGrap
     ],
     applySupported: true,
   };
+  console.info(
+    `[aria:perf] WordPress source parsing completed in ${Date.now() - startedAt}ms for ${Buffer.byteLength(input, "utf8")} bytes and ${items.length} items.`,
+  );
+  return graph;
 }
 
 export async function extractImportSource(input: {

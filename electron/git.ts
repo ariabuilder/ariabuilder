@@ -92,11 +92,13 @@ export function parsePorcelainStatus(text: string): Omit<
   let ahead = 0;
   let behind = 0;
 
-  for (const rawLine of text.split(/\r?\n/)) {
-    if (!rawLine) continue;
+  const records = text.split("\0");
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record) continue;
 
-    if (rawLine.startsWith("## ")) {
-      const header = rawLine.slice(3).trim();
+    if (record.startsWith("## ")) {
+      const header = record.slice(3).trim();
       const aheadMatch = header.match(/\[ahead (\d+)/);
       const behindMatch = header.match(/behind (\d+)/);
       if (aheadMatch) ahead = Number(aheadMatch[1]) || 0;
@@ -119,12 +121,13 @@ export function parsePorcelainStatus(text: string): Omit<
       continue;
     }
 
-    // Rename/copy: "R  old -> new" — take the new path after " -> ".
-    const code = rawLine.slice(0, 2);
-    let filePath = rawLine.slice(3);
-    const arrow = filePath.lastIndexOf(" -> ");
-    if (arrow >= 0) filePath = filePath.slice(arrow + 4);
+    const code = record.slice(0, 2);
+    const filePath = record.slice(3);
     if (!filePath) continue;
+
+    // With `-z`, rename/copy records contain the destination first and the
+    // original path in the following NUL-delimited field. Keep the destination.
+    if (code.includes("R") || code.includes("C")) index += 1;
 
     const entry: GitFileChange = { path: filePath, code };
 
@@ -158,6 +161,7 @@ export async function getGitStatus(root: string): Promise<GitStatus> {
     const { stdout } = await git(root, [
       "status",
       "--porcelain=v1",
+      "-z",
       "-b",
       "--untracked-files=all",
     ]);

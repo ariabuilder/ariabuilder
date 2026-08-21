@@ -1,9 +1,11 @@
 import { z } from "zod";
 import type { GlobalSearchResponse, GlobalSearchResult } from "../shared/search";
+import type { ProjectChange } from "../shared/types";
 import { isNavigableScanPage } from "../shared/pages";
 import { listEntries } from "./cms";
 import { readCollections } from "./collections";
 import { listMedia } from "./media";
+import { canonicalDirectory } from "./pathSafety";
 import { scanProject } from "./workspace";
 
 const SearchInputSchema = z.object({
@@ -53,14 +55,35 @@ function scoreResult(result: GlobalSearchResult, query: string): number {
   return fuzzyWordScore(label, query);
 }
 
-export async function searchProject(
-  projectPath: string,
-  rawInput: unknown,
-): Promise<GlobalSearchResponse> {
-  const input = SearchInputSchema.parse(rawInput ?? {});
-  const query = input.query.toLocaleLowerCase();
-  const scan = await scanProject(projectPath);
-  const collections = readCollections(projectPath).collections;
+type SearchDependencies = {
+  scanProject: typeof scanProject;
+  readCollections: typeof readCollections;
+  listEntries: typeof listEntries;
+  listMedia: typeof listMedia;
+};
+
+const defaultDependencies: SearchDependencies = {
+  scanProject,
+  readCollections,
+  listEntries,
+  listMedia,
+};
+
+const INVENTORY_CHANGE_CATEGORIES = new Set<ProjectChange["category"]>([
+  "asset",
+  "config",
+  "content",
+  "structure",
+]);
+
+export class ProjectSearchService {
+  private readonly inventories = new Map<string, Promise<GlobalSearchResult[]>>();
+
+  public constructor(private readonly dependencies: SearchDependencies = defaultDependencies) {}
+
+  private async buildInventory(projectPath: string): Promise<GlobalSearchResult[]> {
+    const scan = await this.dependencies.scanProject(projectPath);
+    const collections = this.dependencies.readCollections(projectPath).collections;
   const results: GlobalSearchResult[] = [];
 
   for (const page of scan.pages) {
@@ -100,25 +123,31 @@ export async function searchProject(
       detail: collection.name,
       collectionName: collection.name,
     });
-    const entries = listEntries(projectPath, {
-      collectionId: collection.id,
-      query: input.query || undefined,
-      limit: 12,
-    });
-    for (const record of entries.items) {
-      const locale = record.locales.find((item) => item.isSource) ?? record.locales[0]!;
-      results.push({
-        kind: "entry",
-        id: `entry:${collection.id}:${record.entry.id}:${locale.locale}`,
-        label: locale.title || locale.slug,
-        detail: `${collection.label} · ${locale.slug}`,
-        collectionName: collection.name,
-        entryId: record.entry.id,
-        locale: locale.locale,
-      });
+      let page = 1;
+      while (true) {
+        const entries = this.dependencies.listEntries(projectPath, {
+          collectionId: collection.id,
+          page,
+          limit: 200,
+        });
+        for (const record of entries.items) {
+          const locale = record.locales.find((item) => item.isSource) ?? record.locales[0];
+          if (!locale) continue;
+          results.push({
+            kind: "entry",
+            id: `entry:${collection.id}:${record.entry.id}:${locale.locale}`,
+            label: locale.title || locale.slug,
+            detail: `${collection.label} · ${locale.slug}`,
+            collectionName: collection.name,
+            entryId: record.entry.id,
+            locale: locale.locale,
+          });
+        }
+        if (entries.page * entries.limit >= entries.total) break;
+        page += 1;
+      }
     }
-  }
-  for (const asset of listMedia(projectPath)) {
+    for (const asset of this.dependencies.listMedia(projectPath)) {
     results.push({
       kind: "media",
       id: `media:${asset.id}`,
@@ -137,6 +166,26 @@ export async function searchProject(
     { kind: "command", id: "command:start-preview", label: "Start preview server", detail: "Run the local Astro development server", command: "start-preview" },
   );
 
+    return results;
+  }
+
+  private inventory(projectPath: string): Promise<GlobalSearchResult[]> {
+    const root = canonicalDirectory(projectPath);
+    const cached = this.inventories.get(root);
+    if (cached) return cached;
+    const pending = this.buildInventory(root);
+    this.inventories.set(root, pending);
+    void pending.catch(() => {
+      if (this.inventories.get(root) === pending) this.inventories.delete(root);
+    });
+    return pending;
+  }
+
+  public async searchProject(projectPath: string, rawInput: unknown): Promise<GlobalSearchResponse> {
+    const input = SearchInputSchema.parse(rawInput ?? {});
+    const query = input.query.toLocaleLowerCase();
+    const results = await this.inventory(projectPath);
+
   const ranked = results
     .map((result, index) => ({ result, index, score: scoreResult(result, query) }))
     .filter((item) => item.score > 0)
@@ -146,4 +195,28 @@ export async function searchProject(
     results: ranked.slice(0, input.limit).map((item) => item.result),
     truncated: ranked.length > input.limit,
   };
+  }
+
+  public invalidate(projectPath: string, change?: Pick<ProjectChange, "category">): void {
+    if (change?.category && !INVENTORY_CHANGE_CATEGORIES.has(change.category)) return;
+    this.inventories.delete(canonicalDirectory(projectPath));
+  }
+
+  public dispose(projectPath: string): void {
+    this.inventories.delete(canonicalDirectory(projectPath));
+  }
+}
+
+const projectSearch = new ProjectSearchService();
+
+export function searchProject(projectPath: string, rawInput: unknown): Promise<GlobalSearchResponse> {
+  return projectSearch.searchProject(projectPath, rawInput);
+}
+
+export function invalidateProjectSearch(projectPath: string, change?: Pick<ProjectChange, "category">): void {
+  projectSearch.invalidate(projectPath, change);
+}
+
+export function disposeProjectSearch(projectPath: string): void {
+  projectSearch.dispose(projectPath);
 }
