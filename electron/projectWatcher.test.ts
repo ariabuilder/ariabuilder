@@ -24,27 +24,90 @@ describe("ProjectWatcher", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "aria-project-watcher-"));
     roots.push(root);
     for (let index = 0; index < 400; index += 1) {
-      fs.mkdirSync(path.join(root, "release", `artifact-${index}`, "nested"), { recursive: true });
+      fs.mkdirSync(path.join(root, "src", "generated", `artifact-${index}`, "nested"), { recursive: true });
     }
     fs.mkdirSync(path.join(root, "src", "pages"), { recursive: true });
 
-    const makeWatcher = () => {
+    let rootListener:
+      | ((eventType: fs.WatchEventType, filename: string | Buffer | null) => void)
+      | undefined;
+    const makeWatcher = (
+      directory: string,
+      listener: (eventType: fs.WatchEventType, filename: string | Buffer | null) => void,
+    ) => {
+      if (path.resolve(directory) === path.resolve(root)) rootListener = listener;
       const nativeWatcher = new EventEmitter() as fs.FSWatcher;
       nativeWatcher.close = () => undefined;
       nativeWatcher.ref = () => nativeWatcher;
       nativeWatcher.unref = () => nativeWatcher;
       return nativeWatcher;
     };
+    const changes: Array<ReturnType<typeof classifyProjectChange>> = [];
     const watcher = new ProjectWatcher(
       root,
-      () => undefined,
-      () => makeWatcher(),
-      () => makeWatcher(),
+      (change) => changes.push(change),
+      makeWatcher,
+      makeWatcher,
     );
     watcher.start();
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(watcher.activeWatcherCount()).toBe(process.platform === "win32" ? 1 : 3);
+    rootListener?.("change", "src/generated/artifact-1/output.ts");
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    expect(changes).toEqual([]);
     watcher.stop();
     expect(watcher.activeWatcherCount()).toBe(0);
+  });
+
+  it("preserves an Astro structure change when a later source change is batched", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "aria-project-watcher-"));
+    roots.push(root);
+    fs.mkdirSync(path.join(root, "src", "pages"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src", "components"), { recursive: true });
+    const listeners = new Map<
+      string,
+      (eventType: fs.WatchEventType, filename: string | Buffer | null) => void
+    >();
+    const makeWatcher = (
+      directory: string,
+      listener: (eventType: fs.WatchEventType, filename: string | Buffer | null) => void,
+    ) => {
+      listeners.set(path.resolve(directory), listener);
+      const nativeWatcher = new EventEmitter() as fs.FSWatcher;
+      nativeWatcher.close = () => undefined;
+      nativeWatcher.ref = () => nativeWatcher;
+      nativeWatcher.unref = () => nativeWatcher;
+      return nativeWatcher;
+    };
+    const changes: Array<ReturnType<typeof classifyProjectChange>> = [];
+    const watcher = new ProjectWatcher(root, (change) => changes.push(change), makeWatcher, makeWatcher);
+    watcher.start();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    if (process.platform === "win32") {
+      const listener = [...listeners.entries()].find(([directory]) =>
+        path.basename(directory) === path.basename(root)
+      )?.[1];
+      expect(listener).toBeTypeOf("function");
+      listener?.("change", "src/pages/index.astro");
+      listener?.("change", "src/components/Card.ts");
+    } else {
+      const pageListener = [...listeners.entries()].find(([directory]) =>
+        directory.endsWith(path.join("src", "pages"))
+      )?.[1];
+      const componentListener = [...listeners.entries()].find(([directory]) =>
+        directory.endsWith(path.join("src", "components"))
+      )?.[1];
+      expect(pageListener).toBeTypeOf("function");
+      expect(componentListener).toBeTypeOf("function");
+      pageListener?.("change", "index.astro");
+      componentListener?.("change", "Card.ts");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    expect(changes.filter((change) => change.category === "structure")).toEqual([
+      expect.objectContaining({ path: "src/pages/index.astro" }),
+    ]);
+    watcher.stop();
   });
 });

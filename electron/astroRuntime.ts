@@ -157,9 +157,14 @@ async function processCommand(pid: number): Promise<string> {
           `$process = Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\"; if ($process) { $process.CommandLine }`,
         ]
       : ["-p", String(pid), "-o", "command="];
-    execFile(command, args, { windowsHide: true }, (error, stdout) => {
-      resolve(error ? "" : stdout.trim());
-    });
+    execFile(
+      command,
+      args,
+      { windowsHide: true, timeout: 5_000, maxBuffer: 1 << 20 },
+      (error, stdout) => {
+        resolve(error ? "" : stdout.trim());
+      },
+    );
   });
 }
 
@@ -280,6 +285,7 @@ async function probeHttp(
   const timeout = setTimeout(() => requestController.abort(), timeoutMs);
   const abort = () => requestController.abort();
   signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
   try {
     const response = await fetch(url, { signal: requestController.signal });
     if (opts?.okOnly) return response.ok;
@@ -290,6 +296,21 @@ async function probeHttp(
     clearTimeout(timeout);
     signal.removeEventListener("abort", abort);
   }
+}
+
+function waitUnlessAborted(signal: AbortSignal, delayMs: number): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const finish = (completed: boolean) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve(completed);
+    };
+    const onAbort = () => finish(false);
+    const timer = setTimeout(() => finish(true), delayMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
 }
 
 /** Join a live preview base URL with an app route (`/about`). */
@@ -346,13 +367,14 @@ export async function waitForPreviewRoute(
 async function probeHttpStable(
   url: string,
   signal: AbortSignal,
-  gapMs = 300,
+  opts?: { gapMs?: number; timeoutMs?: number },
 ): Promise<boolean> {
-  const opts = { timeoutMs: PROBE_READY_TIMEOUT_MS };
-  if (!(await probeHttp(url, signal, opts))) return false;
-  await new Promise((resolve) => setTimeout(resolve, gapMs));
-  if (signal.aborted) return false;
-  return probeHttp(url, signal, opts);
+  const probeOptions = {
+    timeoutMs: opts?.timeoutMs ?? PROBE_READY_TIMEOUT_MS,
+  };
+  if (!(await probeHttp(url, signal, probeOptions))) return false;
+  if (!(await waitUnlessAborted(signal, opts?.gapMs ?? 300))) return false;
+  return probeHttp(url, signal, probeOptions);
 }
 
 /**
@@ -586,12 +608,37 @@ export class AstroRuntimeManager {
       throw new Error("Aria could not verify that the existing process belongs to this project's Astro installation.");
     }
 
+    const previousRun = this.runs.get(root);
     const validationController = new AbortController();
-    const [reachable, bridge, markers] = await Promise.all([
-      probeHttpStable(`${lock.url}/`, validationController.signal),
-      probeAriaBridge(lock.url, validationController.signal),
-      probeAriaMarkers(lock.url, validationController.signal),
-    ]);
+    const abortValidation = () => validationController.abort();
+    const validationTimeout = setTimeout(
+      abortValidation,
+      PROBE_HEALTH_TIMEOUT_MS,
+    );
+    if (previousRun?.controller.signal.aborted) abortValidation();
+    else previousRun?.controller.signal.addEventListener(
+      "abort",
+      abortValidation,
+      { once: true },
+    );
+    const [reachable, bridge, markers] = await (async () => {
+      try {
+        return await Promise.all([
+          probeHttpStable(`${lock.url}/`, validationController.signal, {
+            timeoutMs: PROBE_HEALTH_TIMEOUT_MS,
+          }),
+          probeAriaBridge(lock.url, validationController.signal),
+          probeAriaMarkers(lock.url, validationController.signal),
+        ]);
+      } finally {
+        clearTimeout(validationTimeout);
+        previousRun?.controller.signal.removeEventListener(
+          "abort",
+          abortValidation,
+        );
+        validationController.abort();
+      }
+    })();
     if (!reachable) {
       throw new Error("The existing Astro preview stopped. Retry preview detection.");
     }
@@ -606,7 +653,6 @@ export class AstroRuntimeManager {
       throw new Error("The existing Astro preview did not stop.");
     }
 
-    const previousRun = this.runs.get(root);
     if (previousRun) {
       previousRun.cancelled = true;
       previousRun.controller.abort();

@@ -139,6 +139,6 @@ const require = __ariaCreateRequire(${JSON.stringify(runtimeBundleUrl)});`,
   console.log(`smoke-real-astro: ok (${live.previewUrl})`);
 } finally {
   if (manager) await manager.stop(project).catch(() => undefined);
-  if (externalPreview) stopProcessTree(externalPreview.child);
+  if (externalPreview) await stopProcessTree(externalPreview.child);
   rmSync(outDir, { recursive: true, force: true });
 }
