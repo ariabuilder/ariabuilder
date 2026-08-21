@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as esbuild from "esbuild";
+import { isPidAlive, startExternalAstroPreview, stopProcessTree } from "./lib/external-astro-preview.mjs";
 
 /**
  * Optional real-Astro runtime smoke (not part of `npm test` / `test:fast`).
@@ -30,6 +31,7 @@ const externalizeTypeScript = {
   },
 };
 let manager;
+let externalPreview;
 try {
   await esbuild.build({
     entryPoints: [path.join(root, "electron/astroRuntime.ts")],
@@ -49,12 +51,28 @@ const require = __ariaCreateRequire(${JSON.stringify(runtimeBundleUrl)});`,
     prepareComponentAuthoringPreview,
   } = await import(pathToFileURL(out).href);
   manager = new AstroRuntimeManager(() => undefined);
+  if (process.env.ARIA_SMOKE_EXTERNAL_PREVIEW === "1") {
+    externalPreview = await startExternalAstroPreview(project);
+  }
   const live = await manager.start(project);
-  if (live.status !== "live" || !live.previewUrl) {
+  if (
+    live.status !== "live" ||
+    !live.previewUrl ||
+    live.authoringState !== "ready" ||
+    live.markersPresent !== true
+  ) {
     const logs = live.logs?.length ? `\n${live.logs.join("\n")}` : "";
     throw new Error(
       `${live.error ?? "The real Astro project did not become ready."}${logs}`,
     );
+  }
+  if (externalPreview) {
+    if (!isPidAlive(externalPreview.child.pid)) {
+      throw new Error("Aria stopped the external Astro preview");
+    }
+    if (live.previewUrl === externalPreview.url || live.previewOwnership !== "aria") {
+      throw new Error("Aria did not start a separate instrumented preview");
+    }
   }
   const response = await fetch(`${live.previewUrl}/`);
   if (response.status >= 400) {
@@ -121,5 +139,6 @@ const require = __ariaCreateRequire(${JSON.stringify(runtimeBundleUrl)});`,
   console.log(`smoke-real-astro: ok (${live.previewUrl})`);
 } finally {
   if (manager) await manager.stop(project).catch(() => undefined);
+  if (externalPreview) stopProcessTree(externalPreview.child);
   rmSync(outDir, { recursive: true, force: true });
 }

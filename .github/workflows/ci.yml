@@ -71,6 +71,8 @@ jobs:
         run: npm run smoke:real-astro
         env:
           ARIA_SMOKE_ASTRO_PROJECT: ${{ github.workspace }}/tests/fixtures/astro-smoke
+          ARIA_SMOKE_COMPOSER_ROUTE: /
+          ARIA_SMOKE_EXPECT_HTML: Aria packaged runtime smoke
 
       - name: Build Linux AppImage
         run: npm run dist:linux
@@ -141,6 +143,8 @@ jobs:
         run: npm run smoke:real-astro
         env:
           ARIA_SMOKE_ASTRO_PROJECT: ${{ github.workspace }}\tests\fixtures\astro-smoke
+          ARIA_SMOKE_COMPOSER_ROUTE: /
+          ARIA_SMOKE_EXPECT_HTML: Aria packaged runtime smoke
 
       - name: Build Windows NSIS
         run: npm run dist:win
@@ -197,6 +201,8 @@ jobs:
         run: npm run smoke:real-astro
         env:
           ARIA_SMOKE_ASTRO_PROJECT: ${{ github.workspace }}/tests/fixtures/astro-smoke
+          ARIA_SMOKE_COMPOSER_ROUTE: /
+          ARIA_SMOKE_EXPECT_HTML: Aria packaged runtime smoke
 
       - name: Build macOS dmg + zip
         run: npm run dist:mac:arm64
@@ -254,6 +260,8 @@ jobs:
         run: npm run smoke:real-astro
         env:
           ARIA_SMOKE_ASTRO_PROJECT: ${{ github.workspace }}/tests/fixtures/astro-smoke
+          ARIA_SMOKE_COMPOSER_ROUTE: /
+          ARIA_SMOKE_EXPECT_HTML: Aria packaged runtime smoke
 
       - name: Build macOS dmg + zip
         run: npm run dist:mac:x64

@@ -36,6 +36,12 @@ writeFileSync(
   JSON.stringify({ dependencies: { astro: "^5.0.0" } }),
 );
 const runner = path.join(astroBinDir, "astro-runner.cjs");
+const protocolSource = readFileSync(path.join(root, "shared", "composer", "protocol.ts"), "utf8");
+const bridgeId = /ARIA_BRIDGE_ID\s*=\s*"([^"]+)"/.exec(protocolSource)?.[1];
+const protocolVersion = Number(/ARIA_PROTOCOL_VERSION\s*=\s*(\d+)/.exec(protocolSource)?.[1]);
+if (!bridgeId || !Number.isFinite(protocolVersion)) {
+  throw new Error("Could not read the Composer bridge protocol for runtime smoke");
+}
 writeFileSync(
   path.join(astroPackageDir, "package.json"),
   JSON.stringify({ name: "astro", bin: { astro: "./bin/astro-runner.cjs" } }),
@@ -45,7 +51,15 @@ writeFileSync(
   `const http = require('node:http');
 const portIdx = process.argv.indexOf('--port');
 const port = portIdx >= 0 ? Number(process.argv[portIdx + 1]) : 0;
-const server = http.createServer((_req, res) => { res.end('ok'); });
+const server = http.createServer((req, res) => {
+  if (req.url === '/__aria/bridge-health') {
+    res.setHeader('content-type', 'application/json');
+    res.end(${JSON.stringify(JSON.stringify({ bridgeId, protocolVersion }))});
+    return;
+  }
+  res.setHeader('content-type', 'text/html');
+  res.end('<main data-aria-s="0">ok</main>');
+});
 server.listen(port, '127.0.0.1', () => {
   const addr = server.address();
   const bound = typeof addr === 'object' && addr ? addr.port : port;

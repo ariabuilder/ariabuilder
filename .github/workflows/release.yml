@@ -40,6 +40,8 @@ jobs:
         run: npm run smoke:real-astro
         env:
           ARIA_SMOKE_ASTRO_PROJECT: ${{ github.workspace }}/tests/fixtures/astro-smoke
+          ARIA_SMOKE_COMPOSER_ROUTE: /
+          ARIA_SMOKE_EXPECT_HTML: Aria packaged runtime smoke
 
   build-macos:
     needs: validate-release

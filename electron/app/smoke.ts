@@ -2,6 +2,8 @@ import {
   app,
   type BrowserWindow as BrowserWindowType,
 } from "../electron-api";
+import fs from "node:fs";
+import path from "node:path";
 import { addRecent, stopProjectCreationJobs } from "../project";
 import { trustProject } from "../projectTrust";
 import {
@@ -92,10 +94,26 @@ export function createRendererSmokeController(
         const projectSession = await openSession(bootProject, win.webContents.id);
         addRecent(options.userDataPath, projectSession.path);
         const runtimeSession = await startSessionRuntime(projectSession.path);
-        if (!runtimeSession.live || !runtimeSession.previewUrl) {
+        if (
+          !runtimeSession.live ||
+          !runtimeSession.previewUrl ||
+          runtimeSession.authoringState !== "ready" ||
+          runtimeSession.markersPresent !== true
+        ) {
           throw new Error(
-            runtimeSession.error ?? "Packaged Astro runtime did not become live",
+            runtimeSession.error ?? "Packaged Astro runtime did not become Composer-ready",
           );
+        }
+        const externalPid = Number(process.env.ARIA_SMOKE_EXTERNAL_PID ?? 0);
+        if (externalPid > 0) {
+          try {
+            process.kill(externalPid, 0);
+          } catch {
+            throw new Error("Aria stopped the external Astro preview during packaged smoke");
+          }
+          if (runtimeSession.previewOwnership !== "aria") {
+            throw new Error("Aria did not start its own instrumented preview beside the external server");
+          }
         }
         const response = await fetch(`${runtimeSession.previewUrl}/`);
         if (
@@ -103,6 +121,49 @@ export function createRendererSmokeController(
           !(await response.text()).includes("Aria packaged runtime smoke")
         ) {
           throw new Error("Packaged Astro smoke route did not render the fixture");
+        }
+        const designResponse = await fetch(`${runtimeSession.previewUrl}/?aria-design=1`);
+        const designHtml = await designResponse.text();
+        if (!designResponse.ok || !designHtml.includes("data-aria-s")) {
+          throw new Error("Packaged Composer preview did not include selection markers");
+        }
+
+        const relativeFile = "src/pages/index.astro";
+        const absoluteFile = path.join(bootProject, "src", "pages", "index.astro");
+        const originalSource = fs.readFileSync(absoluteFile, "utf8");
+        const draftSource = originalSource.replace(
+          "Aria packaged runtime smoke",
+          "Aria Composer draft smoke",
+        );
+        const leaseId = `packaged-smoke-${Date.now()}`;
+        try {
+          const draftResult = await withSmokeTimeout(
+            win.webContents.executeJavaScript(
+              `window.aria.composer.setPreviewDraft(${JSON.stringify(bootProject)}, ${JSON.stringify(relativeFile)}, ${JSON.stringify(draftSource)}, ${JSON.stringify(leaseId)}, 1)`,
+            ),
+            "Composer draft IPC",
+          );
+          if (!draftResult || draftResult.ok !== true || draftResult.revision !== 1) {
+            throw new Error("Composer draft IPC returned an invalid acknowledgement");
+          }
+          let draftRendered = false;
+          for (let attempt = 0; attempt < 40; attempt += 1) {
+            const draftResponse = await fetch(
+              `${runtimeSession.previewUrl}/?aria-design=1&smoke=${Date.now()}`,
+            );
+            if (draftResponse.ok && (await draftResponse.text()).includes("Aria Composer draft smoke")) {
+              draftRendered = true;
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+          if (!draftRendered) {
+            throw new Error("Composer preview did not render the acknowledged draft");
+          }
+        } finally {
+          await win.webContents.executeJavaScript(
+            `window.aria.composer.clearPreviewDraft(${JSON.stringify(bootProject)}, ${JSON.stringify(leaseId)})`,
+          ).catch(() => undefined);
         }
       }
 
@@ -135,6 +196,15 @@ export function createRendererSmokeController(
             "live" in item &&
             item.live === true,
         );
+      report.authoringReady =
+        Array.isArray(sessionList) &&
+        sessionList.some(
+          (item) =>
+            item &&
+            typeof item === "object" &&
+            "authoringState" in item &&
+            item.authoringState === "ready",
+        );
       report.ipcOk = typeof version === "string" && report.sessionCount !== null;
       report.ipcError = null;
       const valid =
@@ -143,7 +213,11 @@ export function createRendererSmokeController(
         report.ipcOk &&
         !report.ipcError &&
         !report.errorText &&
-        (!isSmokeOpen || (report.sessionCount === 1 && report.runtimeLive));
+        (!isSmokeOpen || (
+          report.sessionCount === 1 &&
+          report.runtimeLive &&
+          report.authoringReady
+        ));
       if (valid) {
         console.log(
           isSmokeOpen ? "ARIA_SMOKE_OPEN_OK" : "ARIA_SMOKE_RENDERER_OK",
