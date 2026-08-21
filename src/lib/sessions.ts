@@ -44,6 +44,10 @@ export function restartSessionRuntime(projectPath: string) {
   return api().sessions.restart(projectPath);
 }
 
+export function replaceExternalSessionRuntime(projectPath: string) {
+  return api().sessions.replaceExternal(projectPath);
+}
+
 export function installSessionDeps(projectPath: string) {
   return api().sessions.installDeps(projectPath);
 }

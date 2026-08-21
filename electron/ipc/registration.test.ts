@@ -162,6 +162,7 @@ const EXPECTED_IPC_CHANNELS = [
   "sessions:installDeps",
   "sessions:list",
   "sessions:open",
+  "sessions:replaceExternal",
   "sessions:restart",
   "sessions:revokeTrust",
   "sessions:start",

@@ -11,13 +11,17 @@ import {
 import Stage from "./Stage.vue"
 
 vi.mock("@/lib/thumbs", () => ({ captureThumbs: vi.fn() }))
-const { restartSessionRuntime } = vi.hoisted(() => ({
+const { confirmPreviewReplacement, replaceExternalSessionRuntime, restartSessionRuntime } = vi.hoisted(() => ({
+  confirmPreviewReplacement: vi.fn(async () => true),
+  replaceExternalSessionRuntime: vi.fn(async () => undefined),
   restartSessionRuntime: vi.fn(async () => undefined),
 }))
+vi.mock("@/composables/useConfirm", () => ({ confirm: confirmPreviewReplacement }))
 vi.mock("@/lib/sessions", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/sessions")>()
   return {
     ...original,
+    replaceExternalSessionRuntime,
     restartSessionRuntime,
   }
 })
@@ -39,7 +43,10 @@ function ready(frame: HTMLIFrameElement) {
   }))
 }
 
-function mountStage(designMode = false) {
+function mountStage(
+  designMode = false,
+  runtimeOverrides: Partial<ProjectRuntimeSession> = {},
+) {
   const host = document.createElement("div")
   document.body.append(host)
   const reloadKey = ref(0)
@@ -53,6 +60,10 @@ function mountStage(designMode = false) {
     error: null,
     logs: [],
     openedAt: Date.now(),
+    authoringState: "ready",
+    recoveryAction: "none",
+    externalPreview: null,
+    ...runtimeOverrides,
   }
   const app = createApp({
     render: () => h(Stage, {
@@ -160,6 +171,35 @@ describe("Stage warm frame swap", () => {
     button.click()
     await nextTick()
     expect(restartSessionRuntime).toHaveBeenCalledWith("/project")
+  })
+
+  it("offers one confirmed replacement action for a blocked external preview", async () => {
+    const { host } = mountStage(true, {
+      live: false,
+      previewUrl: null,
+      previewOwnership: "external",
+      status: "failed",
+      error: "Another Astro preview is using this project.",
+      authoringState: "blocked_external",
+      recoveryAction: "replace_external",
+      externalPreview: { pid: 4321, url: "http://127.0.0.1:4321" },
+    })
+    await nextTick()
+
+    expect(host.textContent).toContain("Preview already running")
+    expect(host.textContent).toContain("Replace preview")
+    expect(host.textContent).not.toContain("Restart preview")
+    const button = [...host.querySelectorAll("button")].find((candidate) =>
+      candidate.textContent?.includes("Replace preview"),
+    ) as HTMLButtonElement
+    button.click()
+    await nextTick()
+    await Promise.resolve()
+    expect(confirmPreviewReplacement).toHaveBeenCalledWith(expect.objectContaining({
+      confirmLabel: "Replace preview",
+      destructive: true,
+    }))
+    expect(replaceExternalSessionRuntime).toHaveBeenCalledWith("/project")
   })
 
   it("reports an incompatible ready bridge instead of ignoring it", async () => {

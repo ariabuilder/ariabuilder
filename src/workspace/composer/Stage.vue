@@ -10,10 +10,12 @@ import { m } from "@/paraglide/messages.js"
 import { cn } from "@/lib/utils"
 import {
   installSessionDeps,
+  replaceExternalSessionRuntime,
   restartSessionRuntime,
   startSessionRuntime,
   type ProjectRuntimeSession,
 } from "@/lib/sessions"
+import { confirm } from "@/composables/useConfirm"
 import { isPreviewMessageOrigin, previewPageUrl, previewWindowMatchesOrigin } from "@/lib/preview"
 import {
   ARIA_BRIDGE_ID,
@@ -274,7 +276,10 @@ const needsInstall = computed(
 )
 const isInstalling = computed(() => status.value === "installing")
 const isLive = computed(
-  () => status.value === "live" && Boolean(props.runtime?.previewUrl),
+  () =>
+    status.value === "live" &&
+    props.runtime?.authoringState === "ready" &&
+    Boolean(props.runtime?.previewUrl),
 )
 const isStarting = computed(() => status.value === "starting")
 const showPreloader = computed(() => isStarting.value || bootRequested.value)
@@ -282,13 +287,20 @@ const canStartServer = computed(
   () =>
     !needsInstall.value &&
     !showPreloader.value &&
+    props.runtime?.recoveryAction !== "replace_external" &&
     (status.value === "stopped" ||
       status.value === "failed" ||
       status.value === "stopping"),
 )
-const composerWarning = computed(() => props.runtime?.composerWarning ?? null)
+const canReplaceExternal = computed(
+  () =>
+    props.runtime?.authoringState === "blocked_external" &&
+    props.runtime.recoveryAction === "replace_external" &&
+    Boolean(props.runtime.externalPreview),
+)
 
 const emptyTitle = computed(() => {
+  if (canReplaceExternal.value) return "Preview already running"
   if (status.value === "failed") return "Preview failed"
   if (status.value === "starting") return m.stage_starting_title()
   if (needsInstall.value) return m.stage_needs_install_title()
@@ -296,6 +308,9 @@ const emptyTitle = computed(() => {
 })
 
 const emptyBody = computed(() => {
+  if (canReplaceExternal.value) {
+    return "This Astro version cannot run Composer beside the existing preview. Replace that preview to enable selection and editing."
+  }
   if (props.runtime?.error && (status.value === "failed" || status.value === "needs_install")) {
     return props.runtime.error
   }
@@ -411,6 +426,33 @@ async function restartPreviewBridge() {
     actionError.value = error instanceof Error ? error.message : String(error)
   } finally {
     bridgeRestarting.value = false
+  }
+}
+
+async function replaceExternalPreview() {
+  const external = props.runtime?.externalPreview
+  if (!external || busy.value) return
+  const accepted = await confirm({
+    title: "Replace the existing Astro preview?",
+    description: `Aria will stop the preview at ${external.url} and start a Composer-ready preview. Any terminal using that preview will disconnect.`,
+    confirmLabel: "Replace preview",
+    cancelLabel: "Cancel",
+    destructive: true,
+  })
+  if (!accepted) return
+  busy.value = true
+  actionError.value = null
+  try {
+    await replaceExternalSessionRuntime(props.projectPath)
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : String(error)
+    try {
+      await restartSessionRuntime(props.projectPath)
+    } catch {
+      // Preserve the replacement error; the refreshed runtime state remains actionable.
+    }
+  } finally {
+    busy.value = false
   }
 }
 const redirectWarning = computed(() => {
@@ -1565,7 +1607,11 @@ onUnmounted(() => {
           <p class="mt-0.5 text-xs leading-relaxed text-muted-foreground">
             {{ bridgeDetail || "The preview selection bridge is not ready." }}
           </p>
-          <p v-if="actionError" class="mt-1 text-xs leading-relaxed text-destructive">
+          <p
+            v-if="actionError"
+            class="mt-1 text-xs leading-relaxed text-destructive"
+            role="alert"
+          >
             {{ actionError }}
           </p>
           <Button
@@ -1654,11 +1700,25 @@ onUnmounted(() => {
             <p
               v-if="actionError"
               class="mt-3 max-w-md text-sm text-destructive"
+              role="alert"
             >
               {{ actionError }}
             </p>
             <Button
-              v-if="needsInstall"
+              v-if="canReplaceExternal"
+              type="button"
+              class="mt-8"
+              size="lg"
+              :disabled="busy"
+              :aria-busy="busy || undefined"
+              @click="replaceExternalPreview"
+            >
+              <Spinner v-if="busy" />
+              <AppIcon v-else name="refresh" />
+              Replace preview
+            </Button>
+            <Button
+              v-else-if="needsInstall"
               type="button"
               class="mt-8"
               size="lg"
@@ -1713,13 +1773,10 @@ onUnmounted(() => {
 
     <!-- Optional Phase 1 bridge debug (enable: localStorage aria.composer.debugBridge=1) -->
     <div
-      v-if="isLive && isDesignMode && (composerWarning || redirectWarning || (showBridgeDebug && (beacon?.selectedPath.value || beacon?.hoverPath.value)))"
+      v-if="isLive && isDesignMode && (redirectWarning || (showBridgeDebug && (beacon?.selectedPath.value || beacon?.hoverPath.value)))"
       class="pointer-events-none absolute bottom-3 left-3 z-20 max-w-md rounded-md border border-border/60 bg-background/90 px-2.5 py-1.5 font-mono text-[11px] leading-snug text-muted-foreground shadow-sm backdrop-blur-sm"
       data-aria-composer-bridge
     >
-      <p v-if="composerWarning" class="text-amber-600 dark:text-amber-400">
-        {{ composerWarning }}
-      </p>
       <p v-if="redirectWarning" class="text-amber-600 dark:text-amber-400">
         {{ redirectWarning }}
       </p>

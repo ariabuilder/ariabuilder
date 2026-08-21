@@ -52,6 +52,9 @@ const runtime = new AstroRuntimeManager((snapshot) => {
   session.logs = snapshot.logs;
   session.markersPresent = snapshot.markersPresent;
   session.composerWarning = snapshot.composerWarning;
+  session.authoringState = snapshot.authoringState;
+  session.recoveryAction = snapshot.recoveryAction;
+  session.externalPreview = snapshot.externalPreview;
   notify(session);
 });
 
@@ -140,6 +143,9 @@ export function openSession(
         existing.status === "needs_install"
       ) {
         existing.status = "needs_install";
+        existing.authoringState = "stopped";
+        existing.recoveryAction = "none";
+        existing.externalPreview = null;
       }
     } else if (existing.status === "needs_install") {
       existing.status = "stopped";
@@ -187,6 +193,9 @@ async function openSessionInternal(key: string): Promise<ProjectRuntimeSession> 
     openedAt: Date.now(),
     markersPresent: null,
     composerWarning: null,
+    authoringState: "stopped",
+    recoveryAction: "none",
+    externalPreview: null,
   };
   sessions.set(key, record);
   const watcher = new ProjectWatcher(key, (change) => {
@@ -297,6 +306,9 @@ export async function startSessionRuntime(projectPath: string): Promise<ProjectR
     session.live = false;
     session.previewUrl = null;
     session.error = "Install project dependencies before starting preview.";
+    session.authoringState = "stopped";
+    session.recoveryAction = "none";
+    session.externalPreview = null;
     notify(session);
     return session;
   }
@@ -320,10 +332,23 @@ export async function restartSessionRuntime(projectPath: string): Promise<Projec
     session.live = false;
     session.previewUrl = null;
     session.error = "Install project dependencies before starting preview.";
+    session.authoringState = "stopped";
+    session.recoveryAction = "none";
+    session.externalPreview = null;
     notify(session);
     return session;
   }
   await runtime.restart(key);
+  if (closing.has(key)) throw new Error("Project session is closing");
+  if (sessions.get(key) !== session) throw new Error("Project session was closed");
+  return session;
+}
+
+export async function replaceExternalSessionRuntime(projectPath: string): Promise<ProjectRuntimeSession> {
+  const key = requireOpenSession(projectPath);
+  const session = sessions.get(key);
+  if (!session) throw new Error("Project is not open in Aria");
+  await runtime.replaceExternal(key);
   if (closing.has(key)) throw new Error("Project session is closing");
   if (sessions.get(key) !== session) throw new Error("Project session was closed");
   return session;
@@ -348,6 +373,9 @@ export async function installSessionDeps(projectPath: string): Promise<ProjectRu
     session.previewUrl = null;
     session.error = null;
     session.logs = [];
+    session.authoringState = "stopped";
+    session.recoveryAction = "none";
+    session.externalPreview = null;
     notify(session);
 
     try {
