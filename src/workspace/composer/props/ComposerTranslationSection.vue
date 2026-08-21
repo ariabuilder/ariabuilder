@@ -87,6 +87,24 @@ onMounted(() => {
   if (!translations?.result.value.scannedAt) void translations?.refresh()
 })
 
+watch(() => doc?.projectPath.value, () => {
+  catalogId.value = ""
+  namespaceName.value = ""
+  keyName.value = ""
+  keySearch.value = ""
+  targetProp.value = ""
+  editingValue.value = ""
+  busy.value = false
+  error.value = ""
+  notice.value = ""
+  adoptionOpen.value = false
+  adoptionPreview.value = null
+  adoptionResult.value = null
+  cutoverPreview.value = null
+  settingsDiffer.value = false
+  void translations?.refresh()
+})
+
 function relativeImport(fromFile: string, toFile: string): string {
   const from = fromFile.split("/").slice(0, -1)
   const to = toFile.replace(/\.(?:ts|js|mjs|cjs|mts|cts|json)$/i, "").split("/")

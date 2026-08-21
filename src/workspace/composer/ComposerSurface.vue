@@ -134,7 +134,10 @@ import { previewPageUrl } from "@/lib/preview"
 import { applyProjectLocaleToRoute } from "../../../shared/localization"
 import { waitForComposerAuthoringPreview } from "@/lib/composerAuthoringPreview"
 import { useComposerOptions } from "./chrome/useComposerOptions"
-import { provideComposerTranslations } from "./useComposerTranslations"
+import {
+  provideComposerTranslations,
+  useComposerTranslationState,
+} from "./useComposerTranslations"
 import {
   createTransientScrollbarController,
   shouldUseTransientScrollbars,
@@ -171,43 +174,14 @@ const emit = defineEmits<{
   "preview-immersive-change": [immersive: boolean]
 }>()
 
-const translationCatalogs = ref<Awaited<ReturnType<typeof listComposerTranslationCatalogs>>>({
-  catalogs: [],
-  unsupported: [],
-  scannedAt: "",
-})
-const translationsLoading = ref(false)
-const translationsError = ref("")
-const activeTranslationLocale = ref("")
-let translationLoadGeneration = 0
-
-async function refreshTranslationCatalogs(force = false): Promise<void> {
-  const projectPath = props.projectPath
-  const generation = ++translationLoadGeneration
-  translationsLoading.value = true
-  translationsError.value = ""
-  try {
-    const result = await listComposerTranslationCatalogs(projectPath, force)
-    if (generation !== translationLoadGeneration || projectPath !== props.projectPath) return
-    translationCatalogs.value = result
-    const locales = [...new Set(result.catalogs.flatMap((catalog) => catalog.locales))]
-    if (!locales.includes(activeTranslationLocale.value)) {
-      activeTranslationLocale.value = result.catalogs[0]?.defaultLocale ?? locales[0] ?? ""
-    }
-  } catch (cause) {
-    if (generation === translationLoadGeneration) translationsError.value = cause instanceof Error ? cause.message : String(cause)
-  } finally {
-    if (generation === translationLoadGeneration) translationsLoading.value = false
-  }
-}
-
-provideComposerTranslations({
-  result: translationCatalogs,
-  loading: translationsLoading,
-  error: translationsError,
-  activeLocale: activeTranslationLocale,
-  refresh: refreshTranslationCatalogs,
-})
+const projectPathRef = toRef(props, "projectPath")
+const composerTranslations = useComposerTranslationState(
+  projectPathRef,
+  listComposerTranslationCatalogs,
+)
+const translationCatalogs = composerTranslations.result
+const activeTranslationLocale = composerTranslations.activeLocale
+provideComposerTranslations(composerTranslations)
 
 const beacon = provideComposerBeacon()
 provideComposerModeNavigation({ openCode: () => void onSurfaceMode("code") })
@@ -229,7 +203,6 @@ defineExpose({ openDesignTools })
 const pathClasses = ref<Record<string, string[][]>>({})
 provideComposerBridgeClasses({ pathClasses })
 
-const projectPathRef = toRef(props, "projectPath")
 const { snapshot } = useDesignSnapshot(projectPathRef)
 const composerFontStylesheetUrlsValue = computed(() =>
   composerFontStylesheetUrls(snapshot.value?.fonts),

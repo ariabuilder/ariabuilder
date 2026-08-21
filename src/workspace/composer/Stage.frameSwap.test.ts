@@ -336,6 +336,7 @@ describe("Stage warm frame swap", () => {
       destructive: true,
     }))
     expect(replaceExternalSessionRuntime).toHaveBeenCalledWith("/project")
+    expect(restartSessionRuntime).not.toHaveBeenCalled()
   })
 
   it("reports an incompatible ready bridge instead of ignoring it", async () => {

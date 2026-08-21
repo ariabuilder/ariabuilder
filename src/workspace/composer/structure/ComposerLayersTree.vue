@@ -1379,7 +1379,7 @@ onMounted(() => {
 }
 
 :deep([data-layer-scroll-content] [data-layer-node]) {
-  inline-size: 100cqi;
+  min-inline-size: 100cqi;
 }
 
 :deep(.layer-children > [data-layer-node])::before,

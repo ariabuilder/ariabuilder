@@ -2,6 +2,8 @@
 
 import { createApp, defineComponent, h, nextTick } from "vue"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { readFileSync } from "node:fs"
+import path from "node:path"
 import type { ComposerLayerRow, ComposerLayerTreeProjection } from "../../../../shared/composer/layers"
 import { createComposerBeacon, provideComposerBeacon } from "../selection/useComposerBeacon"
 import ComposerLayersTree from "./ComposerLayersTree.vue"
@@ -56,6 +58,15 @@ afterEach(() => {
 })
 
 describe("Composer Layers panel layout", () => {
+  it("allows long layer rows to expand beyond the scroll-region width", () => {
+    const source = readFileSync(path.join(
+      process.cwd(),
+      "src/workspace/composer/structure/ComposerLayersTree.vue",
+    ), "utf8")
+    expect(source).toContain("min-inline-size: 100cqi")
+    expect(source).not.toContain("\n  inline-size: 100cqi")
+  })
+
   it("keeps Document below a long independently scrolling Structure tree", async () => {
     const tree: ComposerLayerTreeProjection = {
       content: Array.from({ length: 64 }, (_, index) => row(`content-${index}`, "content")),

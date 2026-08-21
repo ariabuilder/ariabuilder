@@ -11,10 +11,16 @@ export function isPidAlive(pid) {
   }
 }
 
-export function stopProcessTree(child) {
+export function readinessRequestTimeout(deadline, now = Date.now()) {
+  return Math.min(2_500, Math.max(1, deadline - now));
+}
+
+export async function stopProcessTree(child) {
   if (!child?.pid || !isPidAlive(child.pid)) return;
   if (process.platform === "win32") {
-    execFile("taskkill", ["/pid", String(child.pid), "/t", "/f"], () => undefined);
+    await new Promise((resolve) => {
+      execFile("taskkill", ["/pid", String(child.pid), "/t", "/f"], () => resolve());
+    });
     return;
   }
   try {
@@ -66,7 +72,9 @@ export async function startExternalAstroPreview(project, timeoutMs = 30_000) {
         isPidAlive(lock.pid) &&
         typeof lock.url === "string"
       ) {
-        const response = await fetch(lock.url);
+        const response = await fetch(lock.url, {
+          signal: AbortSignal.timeout(readinessRequestTimeout(deadline)),
+        });
         if (response.ok) {
           return {
             child: lock.pid === child.pid ? child : { pid: lock.pid },
@@ -80,6 +88,6 @@ export async function startExternalAstroPreview(project, timeoutMs = 30_000) {
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  stopProcessTree(child);
+  await stopProcessTree(child);
   throw new Error(`External Astro preview did not become ready.\n${output}`);
 }

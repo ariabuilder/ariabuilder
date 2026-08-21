@@ -19,6 +19,7 @@ cpSync(fixtureSource, fixture, {
     return ![
       ".astro",
       ".aria",
+      "node_modules/.aria",
       "src/aria",
       "src/middleware.ts",
     ].some((generated) => relative === generated || relative.startsWith(`${generated}/`));
@@ -89,7 +90,7 @@ try {
   });
   console.log("smoke-installed: ok");
 } finally {
-  stopProcessTree(externalPreview);
+  await stopProcessTree(externalPreview);
   if (mountedVolume) {
     try { execFileSync("hdiutil", ["detach", mountedVolume, "-force"]); } catch {}
   }
