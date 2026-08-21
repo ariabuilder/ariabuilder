@@ -1,16 +1,21 @@
 // @vitest-environment jsdom
 
-import { createApp, h, nextTick, ref } from "vue"
+import { createApp, defineComponent, h, nextTick, ref } from "vue"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { ProjectRuntimeSession } from "@/lib/sessions"
-import {
-  ARIA_BRIDGE_ID,
-  ARIA_MSG,
-  ARIA_PROTOCOL_VERSION,
-} from "../../../shared/composer/protocol"
+import type { AstroDocumentModel } from "../../../shared/composer/types"
+import { ARIA_BRIDGE_ID, ARIA_MSG, ARIA_PROTOCOL_VERSION } from "../../../shared/composer/protocol"
 import Stage from "./Stage.vue"
+import { provideComposerBeacon } from "./selection/useComposerBeacon"
 
 vi.mock("@/lib/thumbs", () => ({ captureThumbs: vi.fn() }))
+vi.mock("@/lib/preview", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/preview")>()
+  return {
+    ...original,
+    previewWindowMatchesOrigin: () => true,
+  }
+})
 const { confirmPreviewReplacement, replaceExternalSessionRuntime, restartSessionRuntime } = vi.hoisted(() => ({
   confirmPreviewReplacement: vi.fn(async () => true),
   replaceExternalSessionRuntime: vi.fn(async () => undefined),
@@ -81,6 +86,97 @@ function mountStage(
   return { host, reloadKey, canvasActive }
 }
 
+function trackedModel(label: string): AstroDocumentModel {
+  return {
+    imports: [],
+    extraFrontmatter: "",
+    nodes: [{
+      id: "0",
+      kind: "element",
+      name: "section",
+      props: { "aria-label": { type: "string", value: label } },
+      children: [],
+    }],
+    propSchema: [],
+    slots: [],
+    extendsTag: null,
+  }
+}
+
+function richTextModel(): AstroDocumentModel {
+  return {
+    imports: [],
+    extraFrontmatter: "",
+    nodes: [{
+      id: "0",
+      kind: "element",
+      name: "p",
+      props: {},
+      children: [{ id: "1", kind: "text", value: "Selected copy" }],
+    }],
+    propSchema: [],
+    slots: [],
+    extendsTag: null,
+  }
+}
+
+function mountTrackedStage(options: {
+  model?: AstroDocumentModel
+  selectedPath?: string | null
+} = {}) {
+  const host = document.createElement("div")
+  document.body.append(host)
+  const pathScope = ref("src/components/First.astro|")
+  const documentModel = ref<AstroDocumentModel>(options.model ?? trackedModel("First"))
+  let beacon!: ReturnType<typeof provideComposerBeacon>
+  const runtime: ProjectRuntimeSession = {
+    path: "/project",
+    name: "Project",
+    live: true,
+    previewUrl: "http://127.0.0.1:4321",
+    status: "live",
+    error: null,
+    logs: [],
+    openedAt: Date.now(),
+    authoringState: "ready",
+    recoveryAction: "none",
+    externalPreview: null,
+  }
+  const app = createApp(defineComponent({
+    setup() {
+      beacon = provideComposerBeacon()
+      if (options.selectedPath !== null) {
+        beacon.illuminate(options.selectedPath ?? "0", { source: "api", reveal: "none" })
+      }
+      return () => h(Stage, {
+        projectPath: "/project",
+        selectedRoute: "/",
+        device: "desktop",
+        runtime,
+        designMode: true,
+        canvasActive: true,
+        showSelectionToolbar: true,
+        showSelectionSizing: true,
+        documentModel: documentModel.value,
+        pathScope: pathScope.value,
+        focusPath: "0.4",
+      })
+    },
+  }))
+  app.mount(host)
+  mounted.push(() => { app.unmount(); host.remove() })
+  return { host, pathScope, documentModel, beacon }
+}
+
+function latestTrackMessage(calls: readonly (readonly unknown[])[]) {
+  return calls
+    .map((call) => call[0])
+    .filter((message): message is Record<string, unknown> =>
+      Boolean(message && typeof message === "object" && (message as Record<string, unknown>).type === ARIA_MSG.track),
+    )
+    .at(-1)
+}
+
 afterEach(() => {
   for (const unmount of mounted.splice(0)) unmount()
   vi.useRealTimers()
@@ -88,6 +184,46 @@ afterEach(() => {
 })
 
 describe("Stage warm frame swap", () => {
+  it("uses the same rich-text owner box for hover and selection", async () => {
+    const { host, beacon } = mountTrackedStage({
+      model: richTextModel(),
+      selectedPath: null,
+    })
+    await nextTick()
+    const frame = host.querySelector("iframe") as HTMLIFrameElement
+    frame.dispatchEvent(new Event("load"))
+    await nextTick()
+    ready(frame)
+    await nextTick()
+
+    const origin = new URL(frame.src).origin
+    const textPath = "src/components/First.astro|0.0"
+    window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow,
+      origin,
+      data: {
+        type: ARIA_MSG.hover,
+        path: textPath,
+        occurrence: 0,
+      },
+    }))
+    await nextTick()
+    expect(beacon.hoverPath.value).toBe("0")
+
+    window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow,
+      origin,
+      data: {
+        type: ARIA_MSG.click,
+        path: textPath,
+        occurrence: 0,
+      },
+    }))
+    await nextTick()
+    expect(beacon.selectedPath.value).toBe("0")
+    expect(beacon.hoverPath.value).toBe(beacon.selectedPath.value)
+  })
+
   it("keeps the visible iframe until its replacement bridge is ready", async () => {
     vi.useFakeTimers()
     const { host, reloadKey } = mountStage()
@@ -251,5 +387,112 @@ describe("Stage warm frame swap", () => {
       }),
       new URL(frame.src).origin,
     )
+  })
+
+  it("keeps first-entry overlays bound to the newest component scope", async () => {
+    const { host, pathScope, documentModel } = mountTrackedStage()
+    await nextTick()
+    const frame = host.querySelector("iframe") as HTMLIFrameElement
+    frame.dispatchEvent(new Event("load"))
+    await nextTick()
+    ready(frame)
+    await nextTick()
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage")
+    documentModel.value = trackedModel("First committed")
+    await nextTick()
+    ready(frame)
+    await nextTick()
+    await vi.waitFor(() => {
+      expect(latestTrackMessage(postMessage.mock.calls)).toBeDefined()
+    })
+    await nextTick()
+
+    const firstTrack = latestTrackMessage(postMessage.mock.calls)
+    const firstRevision = firstTrack?.trackingRevision as number
+    expect(firstTrack).toMatchObject({
+      scope: "src/components/First.astro|",
+      paths: ["src/components/First.astro|0", "0.4"],
+    })
+    expect(Number.isInteger(firstRevision)).toBe(true)
+
+    const origin = new URL(frame.src).origin
+    window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow,
+      origin,
+      data: {
+        type: ARIA_MSG.rects,
+        trackingRevision: firstRevision,
+        rects: {
+          "src/components/First.astro|0": [{ x: 20, y: 30, w: 200, h: 80 }],
+          "0.4": [{ x: 10, y: 10, w: 400, h: 300 }],
+        },
+        classes: {},
+        owners: {},
+      },
+    }))
+    await nextTick()
+    expect(host.querySelector('[data-overlay="toolbar"]')).not.toBeNull()
+    expect(host.querySelectorAll('button[aria-label^="Resize "]')).toHaveLength(8)
+    expect(host.querySelector(".outline-emerald-500")).not.toBeNull()
+
+    pathScope.value = "src/components/Second.astro|"
+    documentModel.value = trackedModel("Second")
+    await nextTick()
+    const secondTrack = latestTrackMessage(postMessage.mock.calls)
+    const secondRevision = secondTrack?.trackingRevision as number
+    expect(secondTrack).toMatchObject({
+      scope: "src/components/Second.astro|",
+      paths: ["src/components/Second.astro|0", "0.4"],
+    })
+    expect(secondRevision).toBeGreaterThan(firstRevision)
+    expect(host.querySelector('[data-overlay="toolbar"]')).toBeNull()
+
+    window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow,
+      origin,
+      data: {
+        type: ARIA_MSG.rects,
+        trackingRevision: firstRevision,
+        rects: {
+          "src/components/Second.astro|0": [{ x: 900, y: 900, w: 1, h: 1 }],
+          "0.4": [{ x: 10, y: 10, w: 400, h: 300 }],
+        },
+        classes: {},
+        owners: {},
+      },
+    }))
+    await nextTick()
+    expect(host.querySelector('[data-overlay="toolbar"]')).toBeNull()
+
+    window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow,
+      origin,
+      data: {
+        type: ARIA_MSG.rects,
+        trackingRevision: secondRevision,
+        rects: {
+          "src/components/Second.astro|0": [{ x: 30, y: 40, w: 220, h: 90 }],
+          "0.4": [{ x: 10, y: 10, w: 400, h: 300 }],
+        },
+        classes: {},
+        owners: {},
+      },
+    }))
+    await nextTick()
+    expect(host.querySelector('[data-overlay="toolbar"]')).not.toBeNull()
+    expect(host.querySelectorAll('button[aria-label^="Resize "]')).toHaveLength(8)
+    expect(host.querySelector("iframe")).toBe(frame)
+
+    pathScope.value = "src/components/First.astro|"
+    documentModel.value = trackedModel("First again")
+    await nextTick()
+    const reentryTrack = latestTrackMessage(postMessage.mock.calls)
+    expect(reentryTrack?.trackingRevision).toEqual(expect.any(Number))
+    expect(reentryTrack?.trackingRevision as number).toBeGreaterThan(secondRevision)
+    expect(reentryTrack).toMatchObject({
+      scope: "src/components/First.astro|",
+      paths: ["src/components/First.astro|0", "0.4"],
+    })
+    expect(host.querySelector("iframe")).toBe(frame)
   })
 })

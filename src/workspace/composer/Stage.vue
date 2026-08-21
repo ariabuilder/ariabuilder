@@ -203,6 +203,7 @@ const computedStyleRequests = new Map<string, {
   timeout: ReturnType<typeof setTimeout>
 }>()
 let computedStyleRequestSequence = 0
+let trackingRevision = 0
 let viewportSnapshot: {
   identity: string
   x: number
@@ -877,8 +878,14 @@ function onCanvasDrop(event: DragEvent) {
 
 function sendTrack() {
   if (!canvasInteractionEnabled.value) return
+  trackingRevision += 1
   if (!beacon) {
-    postToPreview({ type: ARIA_MSG.track, paths: [], scope: "" })
+    postToPreview({
+      type: ARIA_MSG.track,
+      trackingRevision,
+      paths: [],
+      scope: "",
+    })
     return
   }
   const scope = activeScope.value
@@ -893,7 +900,12 @@ function sendTrack() {
       ].filter((p): p is string => Boolean(p)),
     ),
   ]
-  postToPreview({ type: ARIA_MSG.track, paths, scope })
+  postToPreview({
+    type: ARIA_MSG.track,
+    trackingRevision,
+    paths,
+    scope,
+  })
 }
 
 function sendRevealRequest() {
@@ -1068,6 +1080,7 @@ function onPreviewMessage(event: MessageEvent) {
 
   if (event.data.type === ARIA_MSG.rects) {
     const msg = event.data as AriaRectsMessage
+    if (msg.trackingRevision !== trackingRevision) return
     rects.value = msg.rects ?? {}
     if (bridgeClasses) {
       // Remap scoped class keys → bare model paths for the inspector.
@@ -1083,12 +1096,12 @@ function onPreviewMessage(event: MessageEvent) {
     const canvasPath = msg.path
     if (activeScope.value) {
       if (canvasPath && isMarkerPathInScope(canvasPath, activeScope.value)) {
-        beacon?.setCanvasHover(toModelPath(canvasPath), msg.occurrence ?? 0)
+        beacon?.setCanvasHover(toVisibleModelPath(canvasPath), msg.occurrence ?? 0)
       } else {
         beacon?.setCanvasHover(null, 0)
       }
     } else {
-      beacon?.setCanvasHover(canvasPath, msg.occurrence ?? 0)
+      beacon?.setCanvasHover(toVisibleModelPath(canvasPath), msg.occurrence ?? 0)
     }
     if (import.meta.env.DEV && showBridgeDebug.value) {
       console.debug("[aria:composer] hover", msg.path, msg.occurrence)
@@ -1337,10 +1350,17 @@ watch(
       effectiveHoverPath.value,
       activeScope.value,
       activeFocusPath.value,
+      props.documentModel,
       isLive.value,
       canvasInteractionEnabled.value,
     ] as const,
-  () => {
+  (next, previous) => {
+    const scopeChanged = previous && next[3] !== previous[3]
+    const documentChanged = previous && next[5] !== previous[5]
+    if (scopeChanged || documentChanged) {
+      rects.value = {}
+      if (bridgeClasses) bridgeClasses.pathClasses.value = {}
+    }
     if (isLive.value && canvasInteractionEnabled.value) sendTrack()
   },
 )

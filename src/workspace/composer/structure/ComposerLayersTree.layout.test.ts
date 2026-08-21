@@ -72,6 +72,26 @@ describe("Composer Layers panel layout", () => {
     expect(structure?.classList.contains("flex-1")).toBe(true)
     expect(structure?.classList.contains("min-h-0")).toBe(true)
     expect(structure?.classList.contains("overflow-y-auto")).toBe(true)
+    expect(structure?.classList.contains("overflow-x-auto")).toBe(true)
+    expect(structure?.classList.contains("[container-type:inline-size]")).toBe(true)
+    const structureContent = structure?.querySelector<HTMLElement>("[data-layer-scroll-content]")
+    expect(structureContent?.classList.contains("w-max")).toBe(true)
+    expect(structureContent?.classList.contains("min-w-full")).toBe(true)
+    const scrollBy = vi.fn()
+    Object.defineProperty(structure!, "scrollBy", { configurable: true, value: scrollBy })
+    vi.spyOn(structure!, "getBoundingClientRect").mockReturnValue({
+      bottom: 400,
+      height: 400,
+      left: 0,
+      right: 256,
+      top: 0,
+      width: 256,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
+    structure?.dispatchEvent(new MouseEvent("dragover", { bubbles: true, clientX: 255, clientY: 200 }))
+    expect(scrollBy).toHaveBeenCalledWith({ left: 10, top: 0 })
     expect(documentSection?.classList.contains("shrink-0")).toBe(true)
     expect(documentSection?.classList.contains("max-h-[45%]")).toBe(true)
     expect(documentSection?.classList.contains("mx-1")).toBe(false)
@@ -87,7 +107,12 @@ describe("Composer Layers panel layout", () => {
     const documentScroller = documentSection?.querySelector<HTMLElement>('[data-layer-scroll-region="document"]')
     expect(documentScroller).not.toBeNull()
     expect(documentScroller?.classList.contains("overflow-y-auto")).toBe(true)
+    expect(documentScroller?.classList.contains("overflow-x-auto")).toBe(true)
+    expect(documentScroller?.classList.contains("[container-type:inline-size]")).toBe(true)
     expect(documentScroller?.classList.contains("pb-6")).toBe(true)
+    const documentContent = documentScroller?.querySelector<HTMLElement>("[data-layer-scroll-content]")
+    expect(documentContent?.classList.contains("w-max")).toBe(true)
+    expect(documentContent?.classList.contains("min-w-full")).toBe(true)
   })
 
   it("hides the Document section when the document tree is empty", () => {
