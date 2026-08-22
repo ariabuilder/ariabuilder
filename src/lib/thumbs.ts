@@ -182,10 +182,35 @@ export function cancelWarmPageThumbs(): Promise<{ ok: true }> {
   return api().cancelWarm();
 }
 
+/** Shared IPC subscription so page and layout grids use one renderer listener. */
+const pageReadyHandlers = new Set<(payload: PageThumbReadyPayload) => void>();
+let stopPageReadyBridge: (() => void) | null = null;
+
+function ensurePageReadyBridge() {
+  if (stopPageReadyBridge) return;
+  stopPageReadyBridge = api().onPageReady((payload) => {
+    for (const handler of pageReadyHandlers) {
+      try {
+        handler(payload);
+      } catch {
+        /* non-fatal */
+      }
+    }
+  });
+}
+
 export function onPageThumbReady(
   handler: (payload: PageThumbReadyPayload) => void,
 ): () => void {
-  return api().onPageReady(handler);
+  ensurePageReadyBridge();
+  pageReadyHandlers.add(handler);
+  return () => {
+    pageReadyHandlers.delete(handler);
+    if (pageReadyHandlers.size === 0 && stopPageReadyBridge) {
+      stopPageReadyBridge();
+      stopPageReadyBridge = null;
+    }
+  };
 }
 
 /** Shared IPC subscription — avoids MaxListeners with many grid cards. */
