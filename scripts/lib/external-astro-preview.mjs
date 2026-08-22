@@ -51,6 +51,7 @@ export async function stopProcessTree(child) {
         () => isProcessGroupAlive(processGroupId),
         `Process group ${processGroupId}`,
       );
+      await waitForTermination(() => isPidAlive(pid), `Process ${pid}`);
       return;
     } catch (error) {
       if (!(error && typeof error === "object" && "code" in error && error.code === "ESRCH")) {
