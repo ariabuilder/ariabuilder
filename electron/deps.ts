@@ -2,6 +2,10 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { packageManagerEnv } from "./toolEnv";
+import {
+  afterTrackedMutation,
+  beforeTrackedMutation,
+} from "./mutationTracking";
 
 const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g;
 const LOG_LIMIT = 120;
@@ -12,6 +16,10 @@ export type InstallCommand = {
   manager: PackageManager;
   command: string;
   args: string[];
+};
+
+export type PackageMutationCommand = InstallCommand & {
+  action: "add" | "remove";
 };
 
 type InstallRun = {
@@ -60,6 +68,25 @@ export function resolveInstallCommand(root: string): InstallCommand {
     command: win ? "npm.cmd" : "npm",
     args: ["install"],
   };
+}
+
+export function resolvePackageMutationCommand(
+  root: string,
+  action: "add" | "remove",
+  packages: readonly string[],
+): PackageMutationCommand {
+  if (!packages.length) throw new Error("At least one package is required.");
+  const { manager, command } = resolveInstallCommand(root);
+  const args = action === "add"
+    ? manager === "npm"
+      ? ["install", "--save-dev", ...packages]
+      : manager === "pnpm"
+        ? ["add", "--save-dev", ...packages]
+        : ["add", "--dev", ...packages]
+    : manager === "npm"
+      ? ["uninstall", ...packages]
+      : ["remove", ...packages];
+  return { manager, command, args, action };
 }
 
 function stripAnsi(input: string): string {
@@ -210,6 +237,85 @@ export function runProjectInstall(
         );
         return;
       }
+      resolve();
+    });
+  });
+}
+
+const PACKAGE_MUTATION_FILES = [
+  "package.json",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lock",
+  "bun.lockb",
+];
+
+/** Add or remove project packages while Project History captures manifest and lockfile writes. */
+export function runProjectPackageMutation(
+  root: string,
+  action: "add" | "remove",
+  packages: readonly string[],
+  onLog: (chunk: string) => void,
+): Promise<void> {
+  if (installs.has(root)) {
+    return Promise.reject(new Error("Dependencies are already changing."));
+  }
+  const { manager, command, args } = resolvePackageMutationCommand(
+    root,
+    action,
+    packages,
+  );
+  const tracked = PACKAGE_MUTATION_FILES.map((name) => path.join(root, name));
+  for (const file of tracked) beforeTrackedMutation(file);
+  onLog(`> ${manager} ${args.join(" ")}\n\n`);
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: root,
+      env: packageManagerEnv(),
+      shell: process.platform === "win32",
+      detached: process.platform !== "win32",
+      windowsHide: true,
+    });
+    const run: InstallRun = { child, cancelled: false };
+    installs.set(root, run);
+    let settled = false;
+    const finishTracking = () => {
+      for (const file of tracked) afterTrackedMutation(file);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      finishTracking();
+      reject(error);
+    };
+    const append = (buf: Buffer) => {
+      const text = stripAnsi(buf.toString("utf8"));
+      if (text) onLog(text);
+    };
+    child.stdout?.on("data", append);
+    child.stderr?.on("data", append);
+    child.on("error", (error) => {
+      if (installs.get(root) === run) installs.delete(root);
+      if (run.cancelled) return fail(new Error("Dependency change canceled."));
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return fail(new Error(toolMissingMessage(manager)));
+      }
+      fail(new Error(`Could not run ${manager}: ${error.message}`));
+    });
+    child.on("close", (code) => {
+      if (installs.get(root) === run) installs.delete(root);
+      if (run.cancelled) return fail(new Error("Dependency change canceled."));
+      if (code !== 0) {
+        return fail(new Error(
+          `${manager} ${action} failed${code === null ? "" : ` with code ${code}`}.`,
+        ));
+      }
+      if (settled) return;
+      settled = true;
+      finishTracking();
       resolve();
     });
   });
