@@ -661,6 +661,15 @@ export type DesignFontsourceFont = {
   variable: boolean;
 };
 
+/** Resolve the family name declared by Fontsource package CSS. */
+export function fontsourceCssFamily(
+  font: Pick<DesignFontsourceFont, "family" | "variable">,
+): string {
+  const family = font.family.trim();
+  if (!family || !font.variable || /\sVariable$/i.test(family)) return family;
+  return `${family} Variable`;
+}
+
 export type DesignFonts = {
   google: DesignGoogleFont[];
   custom: DesignCustomFont[];

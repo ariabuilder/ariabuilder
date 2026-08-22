@@ -39,6 +39,7 @@ import type {
   DesignSnapshot,
 } from "../../../../shared/design"
 import {
+  fontsourceCssFamily,
   fontsourcePackageName,
   normalizeFontsourceId,
 } from "../../../../shared/design"
@@ -803,7 +804,7 @@ function save() {
           </div>
           <p
             class="select-none text-4xl leading-none text-muted-foreground"
-            :style="{ fontFamily: font.family }"
+            :style="{ fontFamily: fontsourceCssFamily(font) }"
           >
             Aa
           </p>
