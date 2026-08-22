@@ -195,7 +195,7 @@ ${MORPHDOM_SOURCE}
     (/^(Win|Linux)/i.test(navigator.platform || "") ||
       /\\b(Windows|Linux)\\b/i.test(navigator.userAgent || "")) &&
     !(typeof matchMedia === "function" && matchMedia("(forced-colors: active)").matches);
-  const transientScrollbarStates = new Map();
+  const transientScrollbarStates = new WeakMap();
   const installTransientScrollbarStyles = () => {
     if (!transientScrollbarsEnabled || document.getElementById("aria-transient-scrollbars")) return;
     document.documentElement.setAttribute("data-aria-transient-scrollbars", "");
@@ -1143,6 +1143,7 @@ ${MORPHDOM_SOURCE}
     // multi-root components together and repeated instances separate even if
     // reconciliation replaced a run and the in-memory array is incomplete.
     const byOccurrence = new Map();
+    const countedElements = new Set();
     for (let index = 0; index < runs.length; index += 1) {
       const run = runs[index];
       const stampedOccurrence = Number.parseInt(
@@ -1153,7 +1154,10 @@ ${MORPHDOM_SOURCE}
         ? stampedOccurrence
         : index;
       let acc = null;
-      for (const n of run) acc = addNode(acc, n);
+      for (const n of run) {
+        acc = addNode(acc, n);
+        if (n?.nodeType === 1) countedElements.add(n);
+      }
       if (acc) byOccurrence.set(occurrence, acc);
     }
 
@@ -1168,6 +1172,7 @@ ${MORPHDOM_SOURCE}
       "[" + PATH_ATTR + '="' + CSS.escape(p) + '"]',
     )) {
       if (!el.isConnected) continue;
+      if (countedElements.has(el)) continue;
       const stampedOccurrence = Number.parseInt(
         el.getAttribute(OCCURRENCE_ATTR) || "",
         10,
@@ -1344,11 +1349,16 @@ ${MORPHDOM_SOURCE}
   };
 
   let rectsQueued = false;
+  let regionsDirty = false;
   const queueRects = () => {
     if (rectsQueued) return;
     rectsQueued = true;
     nextFrame(() => {
       rectsQueued = false;
+      if (regionsDirty) {
+        regionsDirty = false;
+        collectRegions();
+      }
       sendRects();
     });
   };
@@ -1441,8 +1451,29 @@ ${MORPHDOM_SOURCE}
     }
     window.addEventListener("scroll", queueRects, true);
     window.addEventListener("resize", queueRects);
-    new MutationObserver(() => {
-      collectRegions();
+    new MutationObserver((records) => {
+      const hasStructuralMutation = records.some((record) =>
+        record.type === "childList" && (
+          record.addedNodes.length ||
+          [...record.removedNodes].some((node) =>
+            node.nodeType !== 1 ||
+            node.tagName !== "TEMPLATE" ||
+            (!node.hasAttribute(MARKER_S) && !node.hasAttribute(MARKER_E))
+          )
+        )
+      );
+      const hasMeaningfulMutation = records.some((record) => {
+        if (record.type === "attributes") {
+          return record.attributeName !== PATH_ATTR &&
+            record.attributeName !== OCCURRENCE_ATTR;
+        }
+        if (record.type === "characterData") return true;
+        return hasStructuralMutation;
+      });
+      if (!hasMeaningfulMutation) return;
+      if (hasStructuralMutation) {
+        regionsDirty = true;
+      }
       queueRects();
     }).observe(
       document.body || document.documentElement,

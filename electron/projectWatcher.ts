@@ -56,7 +56,19 @@ function isInsideLexically(root: string, target: string): boolean {
 
 function isGeneratedOutputPath(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, "/").toLowerCase();
-  return normalized === "src/paraglide" || normalized.startsWith("src/paraglide/");
+  return (
+    normalized === "src/paraglide" ||
+    normalized.startsWith("src/paraglide/") ||
+    normalized === "src/generated" ||
+    normalized.startsWith("src/generated/")
+  );
+}
+
+function isMotionRelevantStructureChange(change: ProjectChange | undefined): boolean {
+  return Boolean(
+    change?.category === "structure" &&
+    (!change.path || change.path.toLowerCase().endsWith(".astro")),
+  );
 }
 
 export function classifyProjectChange(relativePath: string): ProjectChange {
@@ -269,7 +281,13 @@ export class ProjectWatcher {
 
   private queueChange(change: ProjectChange): void {
     const category = change.category ?? "other";
-    this.pending.set(category, change);
+    const current = this.pending.get(category);
+    if (
+      !isMotionRelevantStructureChange(current) ||
+      isMotionRelevantStructureChange(change)
+    ) {
+      this.pending.set(category, change);
+    }
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = null;

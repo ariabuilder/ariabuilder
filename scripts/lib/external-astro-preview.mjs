@@ -11,16 +11,58 @@ export function isPidAlive(pid) {
   }
 }
 
-export function stopProcessTree(child) {
-  if (!child?.pid || !isPidAlive(child.pid)) return;
-  if (process.platform === "win32") {
-    execFile("taskkill", ["/pid", String(child.pid), "/t", "/f"], () => undefined);
-    return;
-  }
+function isProcessGroupAlive(processGroupId) {
   try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function readinessRequestTimeout(deadline, now = Date.now()) {
+  return Math.min(2_500, Math.max(1, deadline - now));
+}
+
+async function waitForTermination(isAlive, label, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (isAlive() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (isAlive()) {
+    throw new Error(`${label} did not stop within ${timeoutMs}ms.`);
+  }
+}
+
+export async function stopProcessTree(child) {
+  if (!child?.pid) return;
+  const pid = child.pid;
+  if (process.platform === "win32") {
+    if (!isPidAlive(pid)) return;
+    await new Promise((resolve) => {
+      execFile("taskkill", ["/pid", String(pid), "/t", "/f"], () => resolve());
+    });
+    await waitForTermination(() => isPidAlive(pid), `Process ${pid}`);
+  } else {
+    const processGroupId = child.processGroupId ?? pid;
+    try {
+      process.kill(-processGroupId, "SIGKILL");
+      await waitForTermination(
+        () => isProcessGroupAlive(processGroupId),
+        `Process group ${processGroupId}`,
+      );
+      await waitForTermination(() => isPidAlive(pid), `Process ${pid}`);
+      return;
+    } catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "ESRCH")) {
+        throw error;
+      }
+    }
+    if (!isPidAlive(pid)) return;
     if (typeof child.kill === "function") child.kill("SIGKILL");
-    else process.kill(child.pid, "SIGKILL");
-  } catch {}
+    else process.kill(pid, "SIGKILL");
+    await waitForTermination(() => isPidAlive(pid), `Process ${pid}`);
+  }
 }
 
 export async function startExternalAstroPreview(project, timeoutMs = 30_000) {
@@ -52,8 +94,10 @@ export async function startExternalAstroPreview(project, timeoutMs = 30_000) {
   ], {
     cwd: project,
     stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
     windowsHide: true,
   });
+  if (process.platform !== "win32") child.processGroupId = child.pid;
   let output = "";
   child.stdout?.on("data", (chunk) => { output += chunk.toString(); });
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
@@ -66,10 +110,14 @@ export async function startExternalAstroPreview(project, timeoutMs = 30_000) {
         isPidAlive(lock.pid) &&
         typeof lock.url === "string"
       ) {
-        const response = await fetch(lock.url);
+        const response = await fetch(lock.url, {
+          signal: AbortSignal.timeout(readinessRequestTimeout(deadline)),
+        });
         if (response.ok) {
           return {
-            child: lock.pid === child.pid ? child : { pid: lock.pid },
+            child: lock.pid === child.pid
+              ? child
+              : { pid: lock.pid, processGroupId: child.processGroupId },
             url: lock.url,
           };
         }
@@ -80,6 +128,6 @@ export async function startExternalAstroPreview(project, timeoutMs = 30_000) {
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  stopProcessTree(child);
+  await stopProcessTree(child);
   throw new Error(`External Astro preview did not become ready.\n${output}`);
 }
