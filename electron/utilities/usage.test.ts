@@ -48,4 +48,19 @@ describe("Tailwind disable usage scan", () => {
       token: "@utility",
     });
   });
+
+  it("finds Tailwind usage in a top-level styles directory", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "aria-utilities-usage-"));
+    roots.push(root);
+    fs.mkdirSync(path.join(root, "styles"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "styles", "theme.css"),
+      ".card { @apply rounded-lg shadow-md; }\n",
+    );
+
+    expect(scanUtilityUsage(root)).toEqual(expect.arrayContaining([
+      { relativePath: "styles/theme.css", token: "rounded-lg" },
+      { relativePath: "styles/theme.css", token: "shadow-md" },
+    ]));
+  });
 });

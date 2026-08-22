@@ -30,6 +30,7 @@ export function scanUtilityUsage(projectPath: string): UtilityUsage[] {
   const root = canonicalDirectory(projectPath);
   const files: string[] = [];
   walk(path.join(root, "src"), files);
+  walk(path.join(root, "styles"), files);
   const usages: UtilityUsage[] = [];
   for (const absolute of files) {
     let content = fs.readFileSync(absolute, "utf8");

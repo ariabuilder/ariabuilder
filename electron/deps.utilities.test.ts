@@ -42,6 +42,46 @@ describe("utility package commands", () => {
     expect(command.args).toEqual(["remove", "tailwindcss", "@tailwindcss/vite"]);
   });
 
+  it.each([
+    ["yarn.lock", "yarn"],
+    ["bun.lock", "bun"],
+  ] as const)("adds packages with %s using --dev", (lockfile, manager) => {
+    const command = resolvePackageMutationCommand(
+      rootWith(lockfile),
+      "add",
+      ["tailwindcss@^4", "@tailwindcss/vite@^4"],
+    );
+    expect(command.manager).toBe(manager);
+    expect(command.args).toEqual([
+      "add",
+      "--dev",
+      "tailwindcss@^4",
+      "@tailwindcss/vite@^4",
+    ]);
+  });
+
+  it("uses npm uninstall for package removal", () => {
+    const command = resolvePackageMutationCommand(
+      rootWith("package-lock.json"),
+      "remove",
+      ["tailwindcss", "@tailwindcss/vite"],
+    );
+    expect(command.manager).toBe("npm");
+    expect(command.args).toEqual([
+      "uninstall",
+      "tailwindcss",
+      "@tailwindcss/vite",
+    ]);
+  });
+
+  it("rejects an empty package list", () => {
+    expect(() => resolvePackageMutationCommand(
+      rootWith("package-lock.json"),
+      "add",
+      [],
+    )).toThrow("At least one package is required.");
+  });
+
   it("rejects package specifiers that could be reparsed by a Windows shell", () => {
     expect(() => resolvePackageMutationCommand(
       rootWith("package-lock.json"),
