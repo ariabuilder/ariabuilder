@@ -14,7 +14,11 @@ import type {
   DesignVariableDefinition,
   DesignVariables,
 } from "../../shared/design";
-import { cloneDesignFonts, normalizeFontsourceId } from "../../shared/design";
+import {
+  cloneDesignFonts,
+  fontsourceCssFamily,
+  normalizeFontsourceId,
+} from "../../shared/design";
 
 export type DesignOpFail = { ok: false; message: string };
 export type DesignOpPatch = { ok: true; patch: DesignPatch; detail?: Record<string, unknown> };
@@ -298,7 +302,10 @@ export function disableFontPatch(
     google: snapshot.fonts.google.filter((font) => font.family.toLowerCase() !== key),
     custom: snapshot.fonts.custom.filter((font) => font.family.toLowerCase() !== key),
     fontsource: (snapshot.fonts.fontsource ?? []).filter(
-      (font) => font.family.toLowerCase() !== key && font.id !== idKey,
+      (font) =>
+        font.family.toLowerCase() !== key &&
+        fontsourceCssFamily(font).toLowerCase() !== key &&
+        font.id !== idKey,
     ),
     bodyFamily:
       snapshot.fonts.bodyFamily?.toLowerCase() === key ? undefined : snapshot.fonts.bodyFamily,

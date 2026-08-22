@@ -77,7 +77,7 @@ describe("phase 3 design manager ops", () => {
         fontsource: [{ id: "outfit", family: "Outfit", variable: true }],
       },
     });
-    const disabled = disableFontPatch(withBoth, "Outfit");
+    const disabled = disableFontPatch(withBoth, "Outfit Variable");
     expect(disabled.ok).toBe(true);
     if (!disabled.ok) return;
     expect(disabled.patch.fonts?.fontsource).toEqual([]);

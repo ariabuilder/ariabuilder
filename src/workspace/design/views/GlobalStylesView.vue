@@ -44,10 +44,13 @@ import {
   createVariableReferenceValue,
   extractVariableReferenceKey,
 } from "../lib/variableReferences"
+import { buildDesignFontOptions } from "../lib/fontOptions"
 
 const EMPTY_SELECT_VALUE = "__empty__"
 const CONTROL_CLASS =
   "h-9.5! px-3 text-sm text-muted-foreground placeholder:text-muted-foreground"
+const FONT_SELECT_CONTROL_CLASS =
+  "h-9.5! ps-3 pe-10 text-sm text-muted-foreground placeholder:text-muted-foreground"
 const SPACING_INPUT_CLASS =
   "h-9.5! pl-9 pr-3 text-sm text-muted-foreground placeholder:text-muted-foreground"
 const READONLY_CONTROL_CLASS =
@@ -98,19 +101,12 @@ const activeDefaultSection = computed(
 )
 
 const availableFonts = computed(() => {
-  const fonts = props.snapshot?.fonts
-  const families = new Set<string>()
-
-  for (const font of fonts?.google ?? []) {
-    if (font.family.trim()) families.add(font.family.trim())
-  }
-  for (const font of fonts?.custom ?? []) {
-    if (font.family.trim()) families.add(font.family.trim())
-  }
-  if (fonts?.bodyFamily?.trim()) families.add(fonts.bodyFamily.trim())
-  if (fonts?.headingFamily?.trim()) families.add(fonts.headingFamily.trim())
-
-  return Array.from(families).sort((a, b) => a.localeCompare(b))
+  return buildDesignFontOptions(props.snapshot?.fonts, [
+    styles.value.body.fontFamily,
+    styles.value.heading.fontFamily,
+    styles.value.input.fontFamily,
+    styles.value.button.base.fontFamily,
+  ]).map((option) => option.family)
 })
 
 function getPath(target: unknown, path: string): unknown {
@@ -580,7 +576,7 @@ function save() {
                           handleSelectUpdate(field.path, String($event))
                         "
                       >
-                        <SelectTrigger hide-icon :class="CONTROL_CLASS">
+                        <SelectTrigger :class="FONT_SELECT_CONTROL_CLASS">
                           <SelectValue>
                             {{
                               getStringValue(field.path).trim() ||
@@ -764,7 +760,7 @@ function save() {
                           handleSelectUpdate(field.path, String($event))
                         "
                       >
-                        <SelectTrigger hide-icon :class="CONTROL_CLASS">
+                        <SelectTrigger :class="FONT_SELECT_CONTROL_CLASS">
                           <SelectValue>
                             {{
                               getStringValue(field.path).trim() ||
