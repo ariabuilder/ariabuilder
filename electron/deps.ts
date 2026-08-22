@@ -9,6 +9,8 @@ import {
 
 const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g;
 const LOG_LIMIT = 120;
+const PACKAGE_SPECIFIER_RE =
+  /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(?:@[0-9a-z.*_~^+-]+)?$/i;
 
 export type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
@@ -76,6 +78,11 @@ export function resolvePackageMutationCommand(
   packages: readonly string[],
 ): PackageMutationCommand {
   if (!packages.length) throw new Error("At least one package is required.");
+  for (const packageSpecifier of packages) {
+    if (!PACKAGE_SPECIFIER_RE.test(packageSpecifier)) {
+      throw new Error(`Invalid package specifier: ${packageSpecifier}`);
+    }
+  }
   const { manager, command } = resolveInstallCommand(root);
   const args = action === "add"
     ? manager === "npm"

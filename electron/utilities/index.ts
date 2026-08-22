@@ -50,6 +50,7 @@ import {
   applyTailwindThemeBridge,
   assertManagedTailwindStylesheetIntact,
   collectProjectCssForTailwindCollisions,
+  normalizeTailwindStylesheetAfterRemoval,
   removeManagedTailwindStylesheet,
 } from "./themeBridge";
 import { scanUtilityUsage } from "./usage";
@@ -183,7 +184,9 @@ function prepareActivation(projectPath: string): ActivationPlan {
     stylesheetRelativePath,
     stylesheetAbsolutePath,
     stylesheetCreated,
-    stylesheetBeforeHash: stylesheetCreated ? null : sha256(currentStylesheet),
+    stylesheetBeforeHash: stylesheetCreated
+      ? null
+      : sha256(normalizeTailwindStylesheetAfterRemoval(currentStylesheet)),
     stylesheetContent: stylesheetPatch.content,
     stylesheetImportOwned: stylesheetPatch.importOwned,
     sourceEdits: sourcePlan.edits,
@@ -361,6 +364,13 @@ export async function disableUtilityLibrary(
     };
   });
 
+  if (receipt.packagesOwned.length) {
+    report(reporter, actionId, root, "disable", "packages", "Removing Aria-installed Tailwind packages.");
+    await runProjectPackageMutation(root, "remove", receipt.packagesOwned, (log) =>
+      report(reporter, actionId, root, "disable", "packages", "Removing project packages.", log),
+    );
+  }
+
   report(reporter, actionId, root, "disable", "configuration", "Removing Aria-managed Tailwind setup.");
   if (nextConfig === null) removePathTracked(configAbsolute, { force: true });
   else if (nextConfig !== configContent) writeTextFileAtomic(configAbsolute, nextConfig);
@@ -369,13 +379,6 @@ export async function disableUtilityLibrary(
     removePathTracked(stylesheetAbsolute, { force: true });
   } else {
     writeTextFileAtomic(stylesheetAbsolute, nextStylesheet);
-  }
-
-  if (receipt.packagesOwned.length) {
-    report(reporter, actionId, root, "disable", "packages", "Removing Aria-installed Tailwind packages.");
-    await runProjectPackageMutation(root, "remove", receipt.packagesOwned, (log) =>
-      report(reporter, actionId, root, "disable", "packages", "Removing project packages.", log),
-    );
   }
   removeTailwindReceipt(root);
 

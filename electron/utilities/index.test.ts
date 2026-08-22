@@ -69,6 +69,19 @@ describe("utility manager flow", () => {
       .toBe(config);
   });
 
+  it("does not preserve a managed source import for normalization-only stylesheet changes", async () => {
+    const { root, page } = fixture();
+    write(root, "src/styles/global.css", "/* Site styles */\n\n");
+
+    await activateUtilityLibrary(root, "tailwind");
+    await disableUtilityLibrary(root, "tailwind");
+
+    expect(fs.readFileSync(path.join(root, "src/pages/index.astro"), "utf8"))
+      .toBe(page);
+    expect(fs.readFileSync(path.join(root, "src/styles/global.css"), "utf8"))
+      .toBe("/* Site styles */\n");
+  });
+
   it("activates, follows Aria palette saves, and safely removes owned setup", async () => {
     const { root, config, page } = fixture();
     const progress: string[] = [];
@@ -116,5 +129,35 @@ describe("utility manager flow", () => {
       .toBe(config.replace(/\s+/g, " ").trim());
     expect(fs.existsSync(path.join(root, ".aria", "utilities.json"))).toBe(false);
     expect(inspectUtilityManager(root).libraries[0]!.status).toBe("partial");
+  });
+
+  it("keeps design saves successful when the managed Tailwind stylesheet drifted", async () => {
+    const { root } = fixture();
+    await activateUtilityLibrary(root, "tailwind");
+    const stylesheet = path.join(root, "src/styles/global.css");
+    fs.writeFileSync(
+      stylesheet,
+      fs.readFileSync(stylesheet, "utf8").replace(
+        "/* aria:utility-manager:tailwind-theme-end */",
+        "/* user-edited-theme-end */",
+      ),
+    );
+
+    const snapshot = patchDesignSystem(root, {
+      colors: {
+        palettes: [{
+          id: "brand",
+          name: "brand",
+          source: "aria",
+          shades: { DEFAULT: "#123456" },
+        }],
+        semantic: {},
+      },
+    });
+
+    expect(snapshot.colors.palettes[0]?.name).toBe("brand");
+    expect(inspectUtilityManager(root).libraries[0]!.diagnostics.some(
+      (item) => item.code === "managed_setup_changed" || item.code === "stylesheet_unreadable",
+    )).toBe(true);
   });
 });

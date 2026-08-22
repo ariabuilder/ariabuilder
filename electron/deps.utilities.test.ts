@@ -41,4 +41,17 @@ describe("utility package commands", () => {
     expect(command.manager).toBe("pnpm");
     expect(command.args).toEqual(["remove", "tailwindcss", "@tailwindcss/vite"]);
   });
+
+  it("rejects package specifiers that could be reparsed by a Windows shell", () => {
+    expect(() => resolvePackageMutationCommand(
+      rootWith("package-lock.json"),
+      "remove",
+      ["tailwindcss & calc.exe"],
+    )).toThrow("Invalid package specifier");
+    expect(() => resolvePackageMutationCommand(
+      rootWith("package-lock.json"),
+      "add",
+      ["@tailwindcss/vite@^4", "tailwindcss|whoami"],
+    )).toThrow("Invalid package specifier");
+  });
 });

@@ -195,7 +195,11 @@ export function removeManagedTailwindStylesheet(
       "",
     );
   }
-  return next.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+  return normalizeTailwindStylesheetAfterRemoval(next);
+}
+
+export function normalizeTailwindStylesheetAfterRemoval(content: string): string {
+  return content.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
 
 export function syncManagedTailwindThemeBridge(

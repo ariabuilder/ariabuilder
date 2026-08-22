@@ -32,6 +32,23 @@ const progress = ref<UtilityActionProgress | null>(null)
 const confirmDisable = ref(false)
 const navigate = tryUseWorkspaceNavigate()
 let unsubscribeProgress: (() => void) | null = null
+let requestVersion = 0
+
+type UtilityRequest = {
+  projectRoot: string
+  version: number
+}
+
+function beginRequest(): UtilityRequest {
+  return {
+    projectRoot: props.projectRoot,
+    version: ++requestVersion,
+  }
+}
+
+function isCurrentRequest(request: UtilityRequest): boolean {
+  return request.projectRoot === props.projectRoot && request.version === requestVersion
+}
 
 const library = computed<UtilityLibraryInspection | null>(
   () => inspection.value?.libraries.find((item) => item.id === "tailwind") ?? null,
@@ -74,27 +91,33 @@ const disableLabel = computed(() =>
 )
 
 async function refresh() {
+  const request = beginRequest()
   loading.value = true
   error.value = null
   try {
     if (!window.aria?.utilities) {
       throw new Error(m.settings_utilities_bridge_unavailable())
     }
-    inspection.value = await window.aria.utilities.inspect(props.projectRoot)
+    const nextInspection = await window.aria.utilities.inspect(request.projectRoot)
+    if (isCurrentRequest(request)) inspection.value = nextInspection
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause)
+    if (isCurrentRequest(request)) {
+      error.value = cause instanceof Error ? cause.message : String(cause)
+    }
   } finally {
-    loading.value = false
+    if (isCurrentRequest(request)) loading.value = false
   }
 }
 
 async function activate() {
   if (busy.value || !window.aria?.utilities) return
+  const request = beginRequest()
   busy.value = "activate"
   error.value = null
   const action = library.value?.primaryAction
   try {
-    const result = await window.aria.utilities.activate(props.projectRoot, "tailwind")
+    const result = await window.aria.utilities.activate(request.projectRoot, "tailwind")
+    if (!isCurrentRequest(request)) return
     inspection.value = result.inspection
     toast.success(
       action === "connect"
@@ -102,31 +125,45 @@ async function activate() {
         : m.settings_utilities_activated_success(),
     )
   } catch (cause) {
+    if (!isCurrentRequest(request)) return
     const message = cause instanceof Error ? cause.message : String(cause)
     error.value = message
     toast.error(m.settings_utilities_action_failed(), { description: message })
-    await refresh()
+    try {
+      const nextInspection = await window.aria.utilities.inspect(request.projectRoot)
+      if (isCurrentRequest(request)) inspection.value = nextInspection
+    } catch {
+      // Preserve the original action error.
+    }
   } finally {
-    busy.value = null
+    if (isCurrentRequest(request)) busy.value = null
   }
 }
 
 async function disable() {
   if (busy.value || !window.aria?.utilities) return
+  const request = beginRequest()
   confirmDisable.value = false
   busy.value = "disable"
   error.value = null
   try {
-    const result = await window.aria.utilities.disable(props.projectRoot, "tailwind")
+    const result = await window.aria.utilities.disable(request.projectRoot, "tailwind")
+    if (!isCurrentRequest(request)) return
     inspection.value = result.inspection
     toast.success(m.settings_utilities_disabled_success())
   } catch (cause) {
+    if (!isCurrentRequest(request)) return
     const message = cause instanceof Error ? cause.message : String(cause)
     error.value = message
     toast.error(m.settings_utilities_action_failed(), { description: message })
-    await refresh()
+    try {
+      const nextInspection = await window.aria.utilities.inspect(request.projectRoot)
+      if (isCurrentRequest(request)) inspection.value = nextInspection
+    } catch {
+      // Preserve the original action error.
+    }
   } finally {
-    busy.value = null
+    if (isCurrentRequest(request)) busy.value = null
   }
 }
 
@@ -145,12 +182,21 @@ onMounted(() => {
   void refresh()
 })
 
-onUnmounted(() => unsubscribeProgress?.())
+onUnmounted(() => {
+  requestVersion += 1
+  unsubscribeProgress?.()
+})
 
 watch(
   () => props.projectRoot,
   () => {
+    requestVersion += 1
+    inspection.value = null
+    loading.value = true
+    busy.value = null
+    error.value = null
     progress.value = null
+    confirmDisable.value = false
     void refresh()
   },
 )

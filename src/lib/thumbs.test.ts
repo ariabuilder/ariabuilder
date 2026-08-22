@@ -60,6 +60,39 @@ describe("page thumb ready subscriptions", () => {
     stopSecond();
     expect(stopBridge).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps duplicate callback subscriptions independent", () => {
+    let readyHandler: ((payload: PageThumbReadyPayload) => void) | undefined;
+    const stopBridge = vi.fn();
+    vi.stubGlobal("window", {
+      aria: {
+        thumbs: {
+          onPageReady: (handler: (payload: PageThumbReadyPayload) => void) => {
+            readyHandler = handler;
+            return stopBridge;
+          },
+        },
+      },
+    });
+
+    const handler = vi.fn();
+    const stopFirst = onPageThumbReady(handler);
+    const stopSecond = onPageThumbReady(handler);
+    stops.push(stopFirst, stopSecond);
+    const payload: PageThumbReadyPayload = {
+      projectPath: "/proj",
+      route: "/about",
+    };
+
+    readyHandler?.(payload);
+    expect(handler).toHaveBeenCalledTimes(2);
+    stopFirst();
+    readyHandler?.(payload);
+    expect(handler).toHaveBeenCalledTimes(3);
+    expect(stopBridge).not.toHaveBeenCalled();
+    stopSecond();
+    expect(stopBridge).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("component thumb ready cache", () => {

@@ -778,7 +778,12 @@ export function patchDesignSystem(
 
   const nextContent = applyManagedBlockToFile(existingContent, prior);
   writeTextFileAtomic(absolute, nextContent);
-  syncManagedTailwindThemeBridge(root, prior.colors);
+  try {
+    syncManagedTailwindThemeBridge(root, prior.colors);
+  } catch {
+    // Utility inspection reports missing or edited managed Tailwind setup.
+    // Do not reject a design save after its files have already been persisted.
+  }
 
   return getDesignSnapshot(root);
 }

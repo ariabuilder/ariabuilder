@@ -203,9 +203,10 @@ export function onPageThumbReady(
   handler: (payload: PageThumbReadyPayload) => void,
 ): () => void {
   ensurePageReadyBridge();
-  pageReadyHandlers.add(handler);
+  const subscriber = (payload: PageThumbReadyPayload) => handler(payload);
+  pageReadyHandlers.add(subscriber);
   return () => {
-    pageReadyHandlers.delete(handler);
+    pageReadyHandlers.delete(subscriber);
     if (pageReadyHandlers.size === 0 && stopPageReadyBridge) {
       stopPageReadyBridge();
       stopPageReadyBridge = null;

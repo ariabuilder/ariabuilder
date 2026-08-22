@@ -50,7 +50,7 @@ const EMPTY_SELECT_VALUE = "__empty__"
 const CONTROL_CLASS =
   "h-9.5! px-3 text-sm text-muted-foreground placeholder:text-muted-foreground"
 const FONT_SELECT_CONTROL_CLASS =
-  "h-9.5! ps-3 pe-10 text-sm text-muted-foreground placeholder:text-muted-foreground"
+  "h-9.5! ps-3 pe-10 text-sm text-muted-foreground placeholder:text-muted-foreground [&>svg]:me-8"
 const SPACING_INPUT_CLASS =
   "h-9.5! pl-9 pr-3 text-sm text-muted-foreground placeholder:text-muted-foreground"
 const READONLY_CONTROL_CLASS =

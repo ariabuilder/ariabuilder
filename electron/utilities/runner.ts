@@ -3,6 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { packageManagerEnv } from "../toolEnv";
 
+export function quoteAstroExecutableForShell(
+  executable: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === "win32" ? `"${executable}"` : executable;
+}
+
 export function runAstroSync(
   root: string,
   onLog: (chunk: string) => void,
@@ -18,7 +25,7 @@ export function runAstroSync(
   }
   onLog("> astro sync\n\n");
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, ["sync"], {
+    const child = spawn(quoteAstroExecutableForShell(executable), ["sync"], {
       cwd: root,
       env: packageManagerEnv(),
       shell: process.platform === "win32",

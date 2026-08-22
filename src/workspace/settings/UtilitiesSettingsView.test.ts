@@ -21,4 +21,15 @@ describe("Utilities settings surface", () => {
     expect(source).toContain('variant="destructive"');
     expect(source).toContain('openDesignSection("colors")');
   });
+
+  it("guards asynchronous utility responses when the active project changes", () => {
+    const source = fs.readFileSync(
+      path.join(directory, "UtilitiesSettingsView.vue"),
+      "utf8",
+    );
+    expect(source).toContain("let requestVersion = 0");
+    expect(source).toContain("isCurrentRequest(request)");
+    expect(source).toContain("request.projectRoot");
+    expect(source).toContain("confirmDisable.value = false");
+  });
 });

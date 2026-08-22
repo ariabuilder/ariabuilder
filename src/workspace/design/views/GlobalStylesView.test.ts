@@ -101,6 +101,7 @@ describe("GlobalStylesView font selectors", () => {
       const trigger = fontTrigger(host, placeholder)
       expect(trigger.getAttribute("role")).toBe("combobox")
       expect(trigger.querySelector("svg")).not.toBeNull()
+      expect(trigger.className).toContain("[&>svg]:me-8")
       expect(
         host.querySelector(`input[placeholder="${placeholder}"]`),
       ).toBeNull()

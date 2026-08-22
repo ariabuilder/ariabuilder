@@ -67,8 +67,10 @@ function installedVersion(root: string, name: string): string | null {
 }
 
 function firstVersion(value: string | null): { major: number; minor: number } | null {
-  const match = value?.match(/(\d+)\.(\d+)/);
-  return match ? { major: Number(match[1]), minor: Number(match[2]) } : null;
+  const match = value?.match(/(\d+)(?:\.(\d+))?/);
+  return match
+    ? { major: Number(match[1]), minor: Number(match[2] ?? 0) }
+    : null;
 }
 
 function sha256(value: string): string {
@@ -210,7 +212,10 @@ export function inspectUtilityManager(projectPath: string): UtilityManagerInspec
   let collisionCount = 0;
   if (stylesheet) {
     try {
-      const content = fs.readFileSync(path.join(root, stylesheet), "utf8");
+      const content = fs.readFileSync(
+        resolveWithinRoot(root, stylesheet, { rejectFinalSymlink: true }),
+        "utf8",
+      );
       if (receipt) {
         assertManagedTailwindStylesheetIntact(
           content,
