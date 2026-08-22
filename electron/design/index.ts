@@ -52,6 +52,7 @@ import {
   stylesheetNeedsAriaBemPrimitives,
   type ManagedBlockModel,
 } from "./managedBlock";
+import { syncManagedTailwindThemeBridge } from "../utilities/themeBridge";
 import { readDesignMeta, writeDesignMeta } from "./meta";
 import { detectIconRuntime } from "./iconRuntime";
 import { resolveProjectIcons, searchProjectIcons } from "./iconProvider";
@@ -777,6 +778,7 @@ export function patchDesignSystem(
 
   const nextContent = applyManagedBlockToFile(existingContent, prior);
   writeTextFileAtomic(absolute, nextContent);
+  syncManagedTailwindThemeBridge(root, prior.colors);
 
   return getDesignSnapshot(root);
 }

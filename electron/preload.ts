@@ -71,6 +71,12 @@ import type {
 } from "../shared/history";
 import type { GlobalSearchResponse } from "../shared/search";
 import type { ContentLocalizationSettings } from "../shared/localization";
+import type {
+  UtilityActionProgress,
+  UtilityActionResult,
+  UtilityLibraryId,
+  UtilityManagerInspection,
+} from "../shared/utilities";
 
 export type SaveMediaVariantInput = {
   id: string;
@@ -1057,6 +1063,21 @@ export type AriaDesignApi = {
   ) => Promise<DesignClassRenameResult>;
 };
 
+export type AriaUtilitiesApi = {
+  inspect: (projectPath: string) => Promise<UtilityManagerInspection>;
+  activate: (
+    projectPath: string,
+    library: UtilityLibraryId,
+  ) => Promise<UtilityActionResult>;
+  disable: (
+    projectPath: string,
+    library: UtilityLibraryId,
+  ) => Promise<UtilityActionResult>;
+  onProgress: (
+    handler: (progress: UtilityActionProgress) => void,
+  ) => () => void;
+};
+
 export type AriaApi = {
   markReady: (token: string) => Promise<{ ok: true }>;
   openProjectDialog: () => Promise<DialogOutcome>;
@@ -1081,6 +1102,7 @@ export type AriaApi = {
   workspace: AriaWorkspaceApi;
   composer: AriaComposerApi;
   design: AriaDesignApi;
+  utilities: AriaUtilitiesApi;
   media: AriaMediaApi;
   cms: AriaCmsApi;
   siteExport: AriaSiteExportApi;
@@ -1495,6 +1517,22 @@ const aria: AriaApi = {
       ipcRenderer.invoke("design:scan_class_usage", projectPath, classNames),
     renameClass: (projectPath, from, to) =>
       ipcRenderer.invoke("design:rename_class", projectPath, from, to),
+  },
+  utilities: {
+    inspect: (projectPath) =>
+      ipcRenderer.invoke("utilities:inspect", projectPath),
+    activate: (projectPath, library) =>
+      ipcRenderer.invoke("utilities:activate", projectPath, library),
+    disable: (projectPath, library) =>
+      ipcRenderer.invoke("utilities:disable", projectPath, library),
+    onProgress: (handler) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        progress: UtilityActionProgress,
+      ) => handler(progress);
+      ipcRenderer.on("utilities:progress", listener);
+      return () => ipcRenderer.removeListener("utilities:progress", listener);
+    },
   },
   media: {
     list: (projectPath) => ipcRenderer.invoke("media:list", projectPath),

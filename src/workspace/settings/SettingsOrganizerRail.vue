@@ -23,6 +23,8 @@ function labelFor(id: SettingsTabId): string {
   switch (id) {
     case "general":
       return m.settings_tab_general()
+    case "utilities":
+      return m.settings_tab_utilities()
     case "localization":
       return m.settings_tab_localization()
     case "appearance":

@@ -8,6 +8,7 @@ export type {
 
 export type SettingsTabId =
   | "general"
+  | "utilities"
   | "localization"
   | "appearance"
   | "snippets"
@@ -20,6 +21,7 @@ export type SettingsTabId =
 
 export const SETTINGS_TAB_ORDER: readonly SettingsTabId[] = [
   "general",
+  "utilities",
   "localization",
   "snippets",
   "analytics",

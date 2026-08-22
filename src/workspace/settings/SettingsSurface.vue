@@ -11,6 +11,7 @@ import AppearanceSettingsView from "@/workspace/settings/AppearanceSettingsView.
 import AnalyticsSettingsView from "@/workspace/settings/AnalyticsSettingsView.vue"
 import DiscoverySettingsView from "@/workspace/settings/DiscoverySettingsView.vue"
 import GeneralSettingsView from "@/workspace/settings/GeneralSettingsView.vue"
+import UtilitiesSettingsView from "@/workspace/settings/UtilitiesSettingsView.vue"
 import ImportExportSettingsView from "@/workspace/settings/ImportExportSettingsView.vue"
 import LocalizationSettingsView from "@/workspace/settings/LocalizationSettingsView.vue"
 import SEOSettingsView from "@/workspace/settings/SEOSettingsView.vue"
@@ -101,6 +102,8 @@ const headerTitle = computed((): string => {
   switch (currentSection.value) {
     case "general":
       return m.settings_meta_general_title()
+    case "utilities":
+      return m.settings_meta_utilities_title()
     case "localization":
       return m.settings_meta_localization_title()
     case "appearance":
@@ -130,6 +133,8 @@ const headerDescription = computed((): string => {
   switch (currentSection.value) {
     case "general":
       return m.settings_meta_general_description()
+    case "utilities":
+      return m.settings_meta_utilities_description()
     case "localization":
       return m.settings_meta_localization_description()
     case "appearance":
@@ -334,6 +339,11 @@ async function onSave() {
 
           <AppearanceSettingsView
             v-else-if="currentSection === 'appearance'"
+          />
+
+          <UtilitiesSettingsView
+            v-else-if="currentSection === 'utilities'"
+            :project-root="projectRoot"
           />
 
           <LocalizationSettingsView

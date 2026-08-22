@@ -48,6 +48,12 @@ import type {
   HistoryMutationResult,
   HistoryRestoreDirection,
 } from "../../shared/history";
+import type {
+  UtilityActionProgress,
+  UtilityActionResult,
+  UtilityLibraryId,
+  UtilityManagerInspection,
+} from "../../shared/utilities";
 import type { GlobalSearchResponse } from "../../shared/search";
 import type { ContentLocalizationSettings } from "../../shared/localization";
 import type {
@@ -1249,6 +1255,21 @@ export type AriaDesignApi = {
   ) => Promise<DesignClassRenameResult>;
 };
 
+export type AriaUtilitiesApi = {
+  inspect: (projectPath: string) => Promise<UtilityManagerInspection>;
+  activate: (
+    projectPath: string,
+    library: UtilityLibraryId,
+  ) => Promise<UtilityActionResult>;
+  disable: (
+    projectPath: string,
+    library: UtilityLibraryId,
+  ) => Promise<UtilityActionResult>;
+  onProgress: (
+    handler: (progress: UtilityActionProgress) => void,
+  ) => () => void;
+};
+
 export type AriaAgentApi = {
   getAvailability: (
     projectPath: string,
@@ -1354,6 +1375,7 @@ export type AriaDesktopApi = {
   workspace: AriaWorkspaceApi;
   composer: AriaComposerApi;
   design: AriaDesignApi;
+  utilities: AriaUtilitiesApi;
   media: AriaMediaApi;
   cms: AriaCmsApi;
   siteExport: AriaSiteExportApi;
