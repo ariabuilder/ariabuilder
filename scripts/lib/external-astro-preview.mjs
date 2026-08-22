@@ -15,18 +15,30 @@ export function readinessRequestTimeout(deadline, now = Date.now()) {
   return Math.min(2_500, Math.max(1, deadline - now));
 }
 
+async function waitForProcessExit(pid, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (isPidAlive(pid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (isPidAlive(pid)) {
+    throw new Error(`Process ${pid} did not stop within ${timeoutMs}ms.`);
+  }
+}
+
 export async function stopProcessTree(child) {
   if (!child?.pid || !isPidAlive(child.pid)) return;
+  const pid = child.pid;
   if (process.platform === "win32") {
     await new Promise((resolve) => {
-      execFile("taskkill", ["/pid", String(child.pid), "/t", "/f"], () => resolve());
+      execFile("taskkill", ["/pid", String(pid), "/t", "/f"], () => resolve());
     });
-    return;
+  } else {
+    try {
+      if (typeof child.kill === "function") child.kill("SIGKILL");
+      else process.kill(pid, "SIGKILL");
+    } catch {}
   }
-  try {
-    if (typeof child.kill === "function") child.kill("SIGKILL");
-    else process.kill(child.pid, "SIGKILL");
-  } catch {}
+  await waitForProcessExit(pid);
 }
 
 export async function startExternalAstroPreview(project, timeoutMs = 30_000) {
