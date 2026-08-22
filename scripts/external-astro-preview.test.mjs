@@ -1,8 +1,8 @@
-import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
+  isPidAlive,
   readinessRequestTimeout,
   stopProcessTree,
 } from "./lib/external-astro-preview.mjs";
@@ -19,20 +19,12 @@ describe("external Astro preview smoke helpers", () => {
       stdio: "ignore",
       windowsHide: true,
     });
-    const exited = once(child, "exit");
     try {
       await stopProcessTree(child);
-      await Promise.race([
-        exited,
-        new Promise((_, reject) => setTimeout(
-          () => reject(new Error("Process tree did not stop")),
-          5_000,
-        )),
-      ]);
+      expect(isPidAlive(child.pid)).toBe(false);
     } finally {
-      if (child.exitCode === null) child.kill("SIGKILL");
+      if (isPidAlive(child.pid)) child.kill("SIGKILL");
     }
-    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
   });
 
   it("keeps generated marker state out of installed fixtures", () => {
