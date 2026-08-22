@@ -45,6 +45,7 @@ const adoptionOpen = ref(false)
 const adoptionPreview = ref<Awaited<ReturnType<typeof assessComposerTranslationAdoption>> | null>(null)
 const adoptionResult = ref<Awaited<ReturnType<typeof createComposerTranslationDrafts>> | null>(null)
 const cutoverPreview = ref<Awaited<ReturnType<typeof assessComposerTranslationAdoption>> | null>(null)
+let operationGeneration = 0
 
 const catalogs = computed(() => translations?.result.value.catalogs ?? [])
 const catalog = computed(() => catalogs.value.find((item) => item.id === catalogId.value) ?? catalogs.value[0] ?? null)
@@ -88,6 +89,7 @@ onMounted(() => {
 })
 
 watch(() => doc?.projectPath.value, () => {
+  operationGeneration += 1
   catalogId.value = ""
   namespaceName.value = ""
   keyName.value = ""
@@ -103,7 +105,11 @@ watch(() => doc?.projectPath.value, () => {
   cutoverPreview.value = null
   settingsDiffer.value = false
   void translations?.refresh()
-})
+}, { flush: "sync" })
+
+function isCurrentOperation(generation: number, projectPath: string): boolean {
+  return generation === operationGeneration && projectPath === doc?.projectPath.value
+}
 
 function relativeImport(fromFile: string, toFile: string): string {
   const from = fromFile.split("/").slice(0, -1)
@@ -127,23 +133,31 @@ function parsedDraft(value: string, current: ProjectTranslationScalar | undefine
 async function checkSettings() {
   const current = catalog.value
   if (!current || !doc) { settingsDiffer.value = false; return }
+  const generation = operationGeneration
+  const projectPath = doc.projectPath.value
   try {
-    const settings = await getSiteSettings(doc.projectPath.value)
+    const settings = await getSiteSettings(projectPath)
+    if (!isCurrentOperation(generation, projectPath)) return
     const localization = settings.localization?.content
     settingsDiffer.value = !localization
       || current.locales.some((locale) => !localization.locales.some((item) => item.code === locale && item.enabled))
       || JSON.stringify(localization.resolver ?? { kind: "path-prefix" }) !== JSON.stringify(current.resolver)
-  } catch { settingsDiffer.value = true }
+  } catch {
+    if (isCurrentOperation(generation, projectPath)) settingsDiffer.value = true
+  }
 }
 
 async function useDetectedLocalization() {
   const current = catalog.value
   if (!current || !doc) return
+  const generation = operationGeneration
+  const projectPath = doc.projectPath.value
   busy.value = true; error.value = ""
   try {
-    const settings = await getSiteSettings(doc.projectPath.value)
+    const settings = await getSiteSettings(projectPath)
+    if (!isCurrentOperation(generation, projectPath)) return
     const existing = settings.localization?.content.locales ?? []
-    await updateContentLocalization(doc.projectPath.value, {
+    await updateContentLocalization(projectPath, {
       defaultLocale: current.defaultLocale,
       resolver: current.resolver,
       locales: current.locales.map((code) => {
@@ -154,10 +168,14 @@ async function useDetectedLocalization() {
         }
       }),
     })
+    if (!isCurrentOperation(generation, projectPath)) return
     settingsDiffer.value = false
     notice.value = "Detected localization is now active."
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
-  finally { busy.value = false }
+  } catch (cause) {
+    if (isCurrentOperation(generation, projectPath)) error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (isCurrentOperation(generation, projectPath)) busy.value = false
+  }
 }
 
 function bindValue() {
@@ -204,65 +222,94 @@ async function saveValue() {
   const currentNamespace = namespace.value
   const currentKey = key.value
   if (!currentCatalog || !currentNamespace || !currentKey || !activeLocale.value || !doc || !translations) return
+  const generation = operationGeneration
+  const projectPath = doc.projectPath.value
+  const locale = activeLocale.value
   busy.value = true; error.value = ""
   try {
-    await editComposerTranslationValue(doc.projectPath.value, {
+    await editComposerTranslationValue(projectPath, {
       catalogId: currentCatalog.id, namespace: currentNamespace.name, keyPath: currentKey.path,
-      locale: activeLocale.value, value: parsedDraft(editingValue.value, currentKey.values[activeLocale.value]),
+      locale, value: parsedDraft(editingValue.value, currentKey.values[locale]),
       expectedSourceHash: currentCatalog.sourceHash,
     })
+    if (!isCurrentOperation(generation, projectPath)) return
     await translations.refresh(true)
-    notice.value = `${activeLocale.value} translation saved.`
+    if (!isCurrentOperation(generation, projectPath)) return
+    notice.value = `${locale} translation saved.`
   } catch (cause) {
+    if (!isCurrentOperation(generation, projectPath)) return
     error.value = cause instanceof Error && cause.message.includes("TRANSLATION_CATALOG_CONFLICT")
       ? "The catalog changed on disk. It has been refreshed; review the value and try again."
       : cause instanceof Error ? cause.message : String(cause)
     await translations.refresh(true)
-  } finally { busy.value = false }
+  } finally {
+    if (isCurrentOperation(generation, projectPath)) busy.value = false
+  }
 }
 
 async function reviewAdoption() {
   const currentCatalog = catalog.value
   const currentNamespace = namespace.value
   if (!currentCatalog || !currentNamespace || !doc) return
+  const generation = operationGeneration
+  const projectPath = doc.projectPath.value
   busy.value = true; error.value = ""
   try {
-    adoptionPreview.value = await assessComposerTranslationAdoption(doc.projectPath.value, {
+    const preview = await assessComposerTranslationAdoption(projectPath, {
       catalogId: currentCatalog.id, namespaces: [currentNamespace.name], expectedCatalogHash: currentCatalog.sourceHash,
     })
+    if (!isCurrentOperation(generation, projectPath)) return
+    adoptionPreview.value = preview
     adoptionOpen.value = true
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
-  finally { busy.value = false }
+  } catch (cause) {
+    if (isCurrentOperation(generation, projectPath)) error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (isCurrentOperation(generation, projectPath)) busy.value = false
+  }
 }
 
 async function createDrafts() {
   const preview = adoptionPreview.value
   if (!preview || !doc) return
+  const generation = operationGeneration
+  const projectPath = doc.projectPath.value
   busy.value = true; error.value = ""
   try {
-    adoptionResult.value = await createComposerTranslationDrafts(doc.projectPath.value, {
+    const result = await createComposerTranslationDrafts(projectPath, {
       catalogId: preview.catalogId, namespaces: preview.namespaces.map((item) => item.namespace),
       expectedCatalogHash: preview.catalogHash, expectedPreviewHash: preview.previewHash,
     })
+    if (!isCurrentOperation(generation, projectPath)) return
+    adoptionResult.value = result
     adoptionOpen.value = false
     notice.value = "Aria CMS translation drafts created. Project catalog and consumers were unchanged."
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
-  finally { busy.value = false }
+  } catch (cause) {
+    if (isCurrentOperation(generation, projectPath)) error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (isCurrentOperation(generation, projectPath)) busy.value = false
+  }
 }
 
 async function reviewCutover() {
   const currentCatalog = catalog.value
   const currentNamespace = namespace.value
   if (!currentCatalog || !currentNamespace || !adoptionResult.value || !doc) return
+  const generation = operationGeneration
+  const projectPath = doc.projectPath.value
   busy.value = true; error.value = ""
   try {
-    cutoverPreview.value = await assessComposerTranslationAdoption(doc.projectPath.value, {
+    const preview = await assessComposerTranslationAdoption(projectPath, {
       catalogId: currentCatalog.id,
       namespaces: [currentNamespace.name],
       expectedCatalogHash: currentCatalog.sourceHash,
     })
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
-  finally { busy.value = false }
+    if (!isCurrentOperation(generation, projectPath)) return
+    cutoverPreview.value = preview
+  } catch (cause) {
+    if (isCurrentOperation(generation, projectPath)) error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (isCurrentOperation(generation, projectPath)) busy.value = false
+  }
 }
 
 async function applyCutover() {
@@ -271,10 +318,13 @@ async function applyCutover() {
   const targets = adoptionResult.value?.targets
   const consumers = preview?.namespaces.flatMap((item) => item.consumers) ?? []
   if (!currentCatalog || !preview || !targets || !consumers.length || !doc) return
+  const generation = operationGeneration
+  const projectPath = doc.projectPath.value
   busy.value = true; error.value = ""
   try {
     await doc.flushSave()
-    const result = await applyComposerTranslationCutover(doc.projectPath.value, {
+    if (!isCurrentOperation(generation, projectPath)) return
+    const result = await applyComposerTranslationCutover(projectPath, {
       catalogId: currentCatalog.id,
       namespaces: preview.namespaces.map((item) => item.namespace),
       expectedCatalogHash: preview.catalogHash,
@@ -282,13 +332,18 @@ async function applyCutover() {
       consumerIds: consumers.map((consumer) => consumer.id),
       targets,
     })
+    if (!isCurrentOperation(generation, projectPath)) return
     cutoverPreview.value = null
     adoptionResult.value = null
     await translations?.refresh(true)
+    if (!isCurrentOperation(generation, projectPath)) return
     doc.reloadPreview()
     notice.value = `${result.cutoverConsumers.length} translation consumer${result.cutoverConsumers.length === 1 ? "" : "s"} cut over to Aria CMS. The project catalog remains in place.`
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
-  finally { busy.value = false }
+  } catch (cause) {
+    if (isCurrentOperation(generation, projectPath)) error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (isCurrentOperation(generation, projectPath)) busy.value = false
+  }
 }
 
 watch(catalogs, (items) => { if (!items.some((item) => item.id === catalogId.value)) catalogId.value = items[0]?.id ?? "" }, { immediate: true })
