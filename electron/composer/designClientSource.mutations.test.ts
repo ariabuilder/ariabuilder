@@ -1,8 +1,18 @@
-import { JSDOM } from "jsdom"
+import { JSDOM as BaseJSDOM } from "jsdom"
 import { describe, expect, it, vi } from "vitest"
 import { DESIGN_CLIENT_SOURCE } from "./designClientSource"
 import { asMessageEventSource } from "./designClientSource.testUtils"
 import { ARIA_MSG } from "../../shared/composer/protocol"
+
+class JSDOM extends BaseJSDOM {
+  constructor(...args: ConstructorParameters<typeof BaseJSDOM>) {
+    super(...args)
+    Object.defineProperty(this.window, "requestAnimationFrame", {
+      configurable: true,
+      value: undefined,
+    })
+  }
+}
 
 describe("Composer design client computed styles", () => {
   it("wraps and unwraps a static node without replacing the live node", async () => {

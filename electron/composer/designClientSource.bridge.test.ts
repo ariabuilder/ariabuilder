@@ -26,6 +26,10 @@ describe("Composer design client computed styles", () => {
       pretendToBeVisual: true,
     })
     const { window } = dom
+    Object.defineProperty(window, "requestAnimationFrame", {
+      configurable: true,
+      value: undefined,
+    })
     const target = window.document.querySelector<HTMLElement>("#menu")!
     const trigger = window.document.querySelector<HTMLElement>("#trigger")!
     let open = false
@@ -165,6 +169,10 @@ describe("Composer design client computed styles", () => {
       pretendToBeVisual: true,
     })
     const { window } = dom
+    Object.defineProperty(window, "requestAnimationFrame", {
+      configurable: true,
+      value: undefined,
+    })
     const rect = (left: number) => ({
       x: left,
       y: 10,
@@ -226,6 +234,10 @@ describe("Composer design client computed styles", () => {
       pretendToBeVisual: true,
     })
     const { window } = dom
+    Object.defineProperty(window, "requestAnimationFrame", {
+      configurable: true,
+      value: undefined,
+    })
     const sections = [...window.document.querySelectorAll<HTMLElement>("section")]
     sections.forEach((section, occurrence) => {
       const left = occurrence === 0 ? 10 : 110
@@ -269,6 +281,7 @@ describe("Composer design client computed styles", () => {
           { x: 110, y: 20, w: 80, h: 40 },
         ])
     })
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
     dom.window.close()
   })
 
@@ -281,6 +294,10 @@ describe("Composer design client computed styles", () => {
       pretendToBeVisual: true,
     })
     const { window } = dom
+    Object.defineProperty(window, "requestAnimationFrame", {
+      configurable: true,
+      value: undefined,
+    })
     let width = 0
     const target = window.document.querySelector<HTMLElement>("div")!
     Object.defineProperty(target, "getBoundingClientRect", {
@@ -321,6 +338,7 @@ describe("Composer design client computed styles", () => {
       expect(rectMessages.at(-1)?.rects?.["0"]?.[0])
         .toEqual({ x: 12, y: 18, w: 120, h: 30 })
     })
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
     dom.window.close()
   })
 
@@ -333,6 +351,10 @@ describe("Composer design client computed styles", () => {
       pretendToBeVisual: true,
     })
     const { window } = dom
+    Object.defineProperty(window, "requestAnimationFrame", {
+      configurable: true,
+      value: undefined,
+    })
     const rectMessages: RectMessage[] = []
     window.addEventListener("message", (event) => {
       if (event.data?.type === ARIA_MSG.rects) rectMessages.push(event.data)
@@ -395,6 +417,10 @@ describe("Composer design client computed styles", () => {
       pretendToBeVisual: true,
     })
     const { window } = dom
+    Object.defineProperty(window, "requestAnimationFrame", {
+      configurable: true,
+      value: undefined,
+    })
     const rectMessages: RectMessage[] = []
     window.addEventListener("message", (event) => {
       if (event.data?.type === ARIA_MSG.rects) rectMessages.push(event.data)
@@ -425,6 +451,7 @@ describe("Composer design client computed styles", () => {
     expect(rectMessages.slice(firstRevisionTwo).every((message) =>
       message.trackingRevision === 2,
     )).toBe(true)
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
     dom.window.close()
   })
 
