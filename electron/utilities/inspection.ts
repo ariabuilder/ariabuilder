@@ -25,9 +25,11 @@ import {
 
 const CONFIG_CANDIDATES = [
   "astro.config.mjs",
-  "astro.config.ts",
   "astro.config.js",
+  "astro.config.ts",
+  "astro.config.mts",
   "astro.config.cjs",
+  "astro.config.cts",
 ];
 const SKIP_DIRECTORIES = new Set([
   "node_modules",
@@ -147,6 +149,19 @@ export function inspectUtilityManager(projectPath: string): UtilityManagerInspec
       code: "astro_version_unsupported",
       severity: "error",
       message: "Tailwind one-click setup requires Astro 5.2 or newer.",
+    });
+  }
+  if (
+    configFile &&
+    astroVersion &&
+    astroVersion.major >= 6 &&
+    (configFile.endsWith(".cjs") || configFile.endsWith(".cts"))
+  ) {
+    diagnostics.push({
+      code: "astro_config_format_unsupported",
+      severity: "error",
+      message: `${configFile} is not supported by Astro ${astroVersion.major}. Rename it to astro.config.mjs, astro.config.js, astro.config.ts, or astro.config.mts before activating Tailwind.`,
+      files: [configFile],
     });
   }
   if (frameworks.detected.includes("unocss") && !detectedStylesheet) {

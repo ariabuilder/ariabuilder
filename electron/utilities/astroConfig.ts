@@ -88,7 +88,7 @@ function locate(content: string, fileName = "astro.config.mjs"): LocatedConfig {
     content,
     ts.ScriptTarget.Latest,
     true,
-    fileName.endsWith(".ts") ? ts.ScriptKind.TS : ts.ScriptKind.JS,
+    /\.[cm]?ts$/.test(fileName) ? ts.ScriptKind.TS : ts.ScriptKind.JS,
   );
   let tailwindLocal: string | null = null;
   for (const statement of source.statements) {

@@ -72,6 +72,40 @@ describe("utility manager inspection", () => {
     expect(library.primaryAction).toBe("activate");
   });
 
+  it("recognizes an Astro 5 mts config", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ dependencies: { astro: "^5.2.0" } }),
+      "astro.config.mts": 'import { defineConfig } from "astro/config";\nexport default defineConfig({});\n',
+    });
+
+    expect(findAstroConfigs(root)).toEqual(["astro.config.mts"]);
+    const library = inspectUtilityManager(root).libraries[0]!;
+    expect(library.status).toBe("inactive");
+    expect(library.configFile).toBe("astro.config.mts");
+    expect(library.primaryAction).toBe("activate");
+  });
+
+  it.each(["astro.config.cjs", "astro.config.cts"])(
+    "blocks the unsupported Astro 6 config format %s",
+    (configFile) => {
+      const root = fixture({
+        "package.json": JSON.stringify({ dependencies: { astro: "^6" } }),
+        [configFile]: "export default {};\n",
+      });
+
+      expect(findAstroConfigs(root)).toEqual([configFile]);
+      const library = inspectUtilityManager(root).libraries[0]!;
+      expect(library.status).toBe("blocked");
+      expect(library.configFile).toBe(configFile);
+      expect(library.primaryAction).toBeNull();
+      expect(library.diagnostics).toContainEqual(expect.objectContaining({
+        code: "astro_config_format_unsupported",
+        severity: "error",
+        files: [configFile],
+      }));
+    },
+  );
+
   it("blocks activation when multiple Astro configs exist", () => {
     const root = fixture({
       "package.json": JSON.stringify({ dependencies: { astro: "^6" } }),

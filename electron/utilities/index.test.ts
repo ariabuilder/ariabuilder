@@ -100,6 +100,21 @@ describe("utility manager flow", () => {
     expect(fs.existsSync(path.join(root, ".aria", "utilities.json"))).toBe(false);
   });
 
+  it("patches an existing mts config without creating a second config", async () => {
+    const { root } = fixture();
+    fs.renameSync(
+      path.join(root, "astro.config.mjs"),
+      path.join(root, "astro.config.mts"),
+    );
+
+    await activateUtilityLibrary(root, "tailwind");
+
+    expect(fs.existsSync(path.join(root, "astro.config.mjs"))).toBe(false);
+    const nextConfig = fs.readFileSync(path.join(root, "astro.config.mts"), "utf8");
+    expect(nextConfig).toContain("@tailwindcss/vite");
+    expect(nextConfig).toContain("export default defineConfig({");
+  });
+
   it("activates, follows Aria palette saves, and safely removes owned setup", async () => {
     const { root, config, page } = fixture();
     const progress: string[] = [];
