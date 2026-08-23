@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { inspectUtilityManager } from "./inspection";
+import {
+  findAstroConfig,
+  findAstroConfigs,
+  inspectUtilityManager,
+} from "./inspection";
 
 const roots: string[] = [];
 const outsideFiles: string[] = [];
@@ -66,6 +70,30 @@ describe("utility manager inspection", () => {
     const library = inspectUtilityManager(root).libraries[0]!;
     expect(library.status).toBe("inactive");
     expect(library.primaryAction).toBe("activate");
+  });
+
+  it("blocks activation when multiple Astro configs exist", () => {
+    const root = fixture({
+      "package.json": JSON.stringify({ dependencies: { astro: "^6" } }),
+      "astro.config.mjs": 'import { defineConfig } from "astro/config";\nexport default defineConfig({});\n',
+      "astro.config.ts": 'import { defineConfig } from "astro/config";\nexport default defineConfig({});\n',
+    });
+
+    expect(findAstroConfigs(root)).toEqual([
+      "astro.config.mjs",
+      "astro.config.ts",
+    ]);
+    expect(findAstroConfig(root)).toBeNull();
+    const library = inspectUtilityManager(root).libraries[0]!;
+    expect(library.status).toBe("blocked");
+    expect(library.primaryAction).toBeNull();
+    expect(library.configFile).toBeNull();
+    expect(library.diagnostics).toContainEqual({
+      code: "astro_config_ambiguous",
+      severity: "error",
+      message: "Multiple Astro config files were found. Keep one Astro config before activating Tailwind.",
+      files: ["astro.config.mjs", "astro.config.ts"],
+    });
   });
 
   it("blocks Tailwind 3 instead of attempting an implicit migration", () => {

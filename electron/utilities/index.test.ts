@@ -82,6 +82,24 @@ describe("utility manager flow", () => {
       .toBe("/* Site styles */\n");
   });
 
+  it("does not change the project when multiple Astro configs exist", async () => {
+    const { root, config, page } = fixture();
+    const secondConfig = 'import { defineConfig } from "astro/config";\nexport default defineConfig({});\n';
+    write(root, "astro.config.ts", secondConfig);
+
+    await expect(activateUtilityLibrary(root, "tailwind"))
+      .rejects.toThrow("Multiple Astro config files were found");
+
+    expect(fs.readFileSync(path.join(root, "astro.config.mjs"), "utf8"))
+      .toBe(config);
+    expect(fs.readFileSync(path.join(root, "astro.config.ts"), "utf8"))
+      .toBe(secondConfig);
+    expect(fs.readFileSync(path.join(root, "src/pages/index.astro"), "utf8"))
+      .toBe(page);
+    expect(fs.existsSync(path.join(root, "src/styles/global.css"))).toBe(false);
+    expect(fs.existsSync(path.join(root, ".aria", "utilities.json"))).toBe(false);
+  });
+
   it("activates, follows Aria palette saves, and safely removes owned setup", async () => {
     const { root, config, page } = fixture();
     const progress: string[] = [];

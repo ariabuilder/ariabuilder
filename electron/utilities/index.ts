@@ -26,7 +26,7 @@ import {
   type AstroConfigPatch,
 } from "./astroConfig";
 import {
-  findAstroConfig,
+  findAstroConfigs,
   findTailwindStylesheet,
   inspectUtilityManager,
   projectDependencyNames,
@@ -126,7 +126,11 @@ function prepareActivation(projectPath: string): ActivationPlan {
     : [];
   const packagesOwned = packagesToAdd.map((item) => item.replace(/@\^4$/, ""));
 
-  const existingConfig = findAstroConfig(root);
+  const existingConfigs = findAstroConfigs(root);
+  if (existingConfigs.length > 1) {
+    throw new Error("Multiple Astro config files were found. Keep one Astro config before activating Tailwind.");
+  }
+  const existingConfig = existingConfigs[0] ?? null;
   const configRelativePath = existingConfig ?? "astro.config.mjs";
   const configAbsolutePath = resolveProjectFile(root, configRelativePath, true);
   const configCreated = !existingConfig;

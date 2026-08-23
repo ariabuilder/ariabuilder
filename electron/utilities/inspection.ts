@@ -88,8 +88,13 @@ function walkCss(directory: string, out: string[], limit = 400): void {
   }
 }
 
+export function findAstroConfigs(root: string): string[] {
+  return CONFIG_CANDIDATES.filter((relative) => fs.existsSync(path.join(root, relative)));
+}
+
 export function findAstroConfig(root: string): string | null {
-  return CONFIG_CANDIDATES.find((relative) => fs.existsSync(path.join(root, relative))) ?? null;
+  const configs = findAstroConfigs(root);
+  return configs.length === 1 ? configs[0]! : null;
 }
 
 export function findTailwindStylesheet(root: string): string | null {
@@ -116,7 +121,8 @@ export function inspectUtilityManager(projectPath: string): UtilityManagerInspec
   const viteSpec = dependencyVersion(manifest, "@tailwindcss/vite");
   const tailwindVersion = firstVersion(installedVersion(root, "tailwindcss") ?? tailwindSpec);
   const astroVersion = firstVersion(installedVersion(root, "astro") ?? dependencyVersion(manifest, "astro"));
-  const configFile = findAstroConfig(root);
+  const configFiles = findAstroConfigs(root);
+  const configFile = configFiles.length === 1 ? configFiles[0]! : null;
   const configContent = configFile
     ? fs.readFileSync(path.join(root, configFile), "utf8")
     : null;
@@ -149,6 +155,14 @@ export function inspectUtilityManager(projectPath: string): UtilityManagerInspec
       severity: "error",
       message: "UnoCSS is already configured. Remove it before Aria installs Tailwind.",
       files: frameworks.sources,
+    });
+  }
+  if (configFiles.length > 1) {
+    diagnostics.push({
+      code: "astro_config_ambiguous",
+      severity: "error",
+      message: "Multiple Astro config files were found. Keep one Astro config before activating Tailwind.",
+      files: configFiles,
     });
   }
   if (!configAnalysis.configured && !configAnalysis.safeToPatch) {
