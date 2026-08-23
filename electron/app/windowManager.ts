@@ -21,6 +21,7 @@ import {
   stopAllSessions,
 } from "../sessions";
 import { disposeTerminalsForWebContents } from "../terminal";
+import { installSessionPermissionPolicy } from "./sessionPermissions";
 import { createRendererSmokeController } from "./smoke";
 
 type WindowManagerOptions = {
@@ -124,6 +125,8 @@ export function createWindowManager(options: WindowManagerOptions): WindowManage
         sandbox: true,
       },
     });
+
+    installSessionPermissionPolicy(win.webContents.session, options);
 
     appWindows.add(win);
     if (!mainWindow || mainWindow.isDestroyed()) mainWindow = win;

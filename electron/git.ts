@@ -229,12 +229,20 @@ function mapCheckoutError(detail: string, branch: string): Error {
   return new Error(detail.trim() || `Could not switch to "${branch}"`);
 }
 
+export function normalizeBranchName(branch: string): string {
+  const name = branch.trim();
+  if (!name) throw new Error("Branch name is required");
+  if (name.startsWith("-")) {
+    throw new Error('Branch names cannot start with "-"');
+  }
+  return name;
+}
+
 export async function checkoutBranch(
   root: string,
   branch: string,
 ): Promise<GitStatus> {
-  const name = branch.trim();
-  if (!name) throw new Error("Branch name is required");
+  const name = normalizeBranchName(branch);
   if (!hasGitDir(root)) throw new Error("Not a git repository");
   try {
     await git(root, ["checkout", name]);
@@ -249,8 +257,7 @@ export async function createBranch(
   root: string,
   branch: string,
 ): Promise<GitStatus> {
-  const name = branch.trim();
-  if (!name) throw new Error("Branch name is required");
+  const name = normalizeBranchName(branch);
   if (!hasGitDir(root)) throw new Error("Not a git repository");
   try {
     await git(root, ["checkout", "-b", name]);

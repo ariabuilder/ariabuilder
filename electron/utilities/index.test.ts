@@ -17,15 +17,13 @@ function write(root: string, relativePath: string, content: string): void {
   fs.writeFileSync(absolute, content);
 }
 
-function executableAstro(root: string): void {
-  const relative = process.platform === "win32"
-    ? "node_modules/.bin/astro.cmd"
-    : "node_modules/.bin/astro";
-  const content = process.platform === "win32"
-    ? "@exit /b 0\r\n"
-    : "#!/bin/sh\nexit 0\n";
-  write(root, relative, content);
-  if (process.platform !== "win32") fs.chmodSync(path.join(root, relative), 0o755);
+function projectAstro(root: string): void {
+  write(root, "node_modules/astro/package.json", JSON.stringify({
+    name: "astro",
+    version: "6.0.0",
+    bin: { astro: "bin/cli.mjs" },
+  }));
+  write(root, "node_modules/astro/bin/cli.mjs", "process.exitCode = 0;\n");
 }
 
 function fixture(): { root: string; config: string; page: string } {
@@ -47,7 +45,7 @@ function fixture(): { root: string; config: string; page: string } {
   }, null, 2));
   write(root, "astro.config.mjs", config);
   write(root, "src/pages/index.astro", page);
-  executableAstro(root);
+  projectAstro(root);
   return { root, config, page };
 }
 
