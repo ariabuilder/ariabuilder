@@ -1,34 +1,20 @@
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
+import { resolveLocalAstroCommand } from "../astroCli";
+import { spawnElectronNode } from "../processLaunch";
 import { packageManagerEnv } from "../toolEnv";
-
-export function quoteAstroExecutableForShell(
-  executable: string,
-  platform: NodeJS.Platform = process.platform,
-): string {
-  return platform === "win32" ? `"${executable}"` : executable;
-}
 
 export function runAstroSync(
   root: string,
   onLog: (chunk: string) => void,
 ): Promise<void> {
-  const executable = path.join(
-    root,
-    "node_modules",
-    ".bin",
-    process.platform === "win32" ? "astro.cmd" : "astro",
-  );
-  if (!fs.existsSync(executable)) {
+  const command = resolveLocalAstroCommand(root, ["sync"]);
+  if (!command) {
     return Promise.reject(new Error("The project-local Astro CLI is unavailable after installation."));
   }
   onLog("> astro sync\n\n");
   return new Promise((resolve, reject) => {
-    const child = spawn(quoteAstroExecutableForShell(executable), ["sync"], {
+    const child = spawnElectronNode(command.args, {
       cwd: root,
       env: packageManagerEnv(),
-      shell: process.platform === "win32",
       windowsHide: true,
     });
     const append = (buffer: Buffer) => {
