@@ -352,7 +352,6 @@ function onSelectSection(section: DesignSectionId) {
           class="flex h-full min-h-0 flex-col overflow-hidden px-7 pb-7"
         >
           <StylesheetsView
-            class="min-h-0 flex-1"
             :project-root="projectRoot"
             :variable-references="variableReferences"
             @saved="refresh"

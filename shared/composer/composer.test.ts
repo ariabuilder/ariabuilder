@@ -41,6 +41,24 @@ function collectKinds(nodes: EditableNode[], out = new Set<string>()): Set<strin
   return out;
 }
 
+function collectIds(nodes: EditableNode[], out: string[] = []): string[] {
+  for (const node of nodes) {
+    out.push(node.id);
+    if (node.kind === "map" || node.kind === "fragment") {
+      collectIds(node.children, out);
+    } else if (node.kind === "conditional") {
+      collectIds(node.consequent, out);
+      if (node.alternate) collectIds(node.alternate, out);
+    } else if (
+      (node.kind === "element" || node.kind === "component" || node.kind === "slot") &&
+      Array.isArray(node.children)
+    ) {
+      collectIds(node.children, out);
+    }
+  }
+  return out;
+}
+
 describe("COMPOSER_SOT_POLICY", () => {
   it("rejects JSON DSL sidecar as SoT", () => {
     expect(COMPOSER_SOT_POLICY.documentSot).toBe(".astro on disk");
@@ -152,6 +170,32 @@ describe("parseAstro + serializeAstro round-trip", () => {
     expect(source.slice(paragraph.sourceRange?.from, paragraph.sourceRange?.to)).toBe(
       "<p>👋 café</p>",
     );
+  });
+
+  it("isolates node IDs and UTF-16 ranges across concurrent parses", async () => {
+    const firstSource = `---\nconst greeting = "héllø 👋";\n---\n<section><p>Crème brûlée</p><p>Après</p></section>`;
+    const secondSource = `<main><article>ASCII only</article></main>`;
+    const [first, second] = await Promise.all([
+      parseAstro(firstSource),
+      parseAstro(secondSource),
+    ]);
+
+    expect(first.editable).toBe(true);
+    expect(second.editable).toBe(true);
+    if (!first.editable || !second.editable) return;
+
+    const firstRoot = first.model.nodes[0]!;
+    const secondRoot = second.model.nodes[0]!;
+    expect(firstSource.slice(firstRoot.sourceRange?.from, firstRoot.sourceRange?.to))
+      .toBe("<section><p>Crème brûlée</p><p>Après</p></section>");
+    expect(secondSource.slice(secondRoot.sourceRange?.from, secondRoot.sourceRange?.to))
+      .toBe(secondSource);
+
+    for (const model of [first.model, second.model]) {
+      const ids = collectIds(model.nodes);
+      expect(ids).toContain("n1");
+      expect(new Set(ids).size).toBe(ids.length);
+    }
   });
 
   it("structures map and conditional expressions", async () => {

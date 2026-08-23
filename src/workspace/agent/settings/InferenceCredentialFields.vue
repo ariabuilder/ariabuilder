@@ -95,7 +95,8 @@ const getKeyLabel = computed(() => {
 })
 
 function validateApiKey() {
-  const trimmed = apiKey.value.trim()
+  const value = apiKey.value
+  const trimmed = value.trim()
   if (!trimmed) {
     apiKeyError.value = "API key is required"
     return
@@ -104,11 +105,30 @@ function validateApiKey() {
     apiKeyError.value = "API key looks too short"
     return
   }
-  if (/\s/.test(trimmed)) {
-    apiKeyError.value = "API key must not contain spaces"
+  if (/\s/.test(value)) {
+    apiKeyError.value = "Remove spaces from the API key"
     return
   }
   apiKeyError.value = null
+}
+
+function onApiKeyPaste(event: ClipboardEvent) {
+  const pasted = event.clipboardData?.getData("text")
+  if (pasted === undefined) return
+
+  const input = event.currentTarget
+  if (!(input instanceof HTMLInputElement)) return
+
+  // Provider dashboards sometimes copy a visually wrapped key with spaces,
+  // tabs, or line breaks. API keys are compact tokens, so discard that
+  // formatting while preserving the current selection and caret position.
+  const normalized = pasted.replace(/\s+/g, "")
+  const selectionStart = input.selectionStart ?? input.value.length
+  const selectionEnd = input.selectionEnd ?? selectionStart
+
+  event.preventDefault()
+  input.setRangeText(normalized, selectionStart, selectionEnd, "end")
+  apiKey.value = input.value
 }
 
 function validateBaseUrl() {
@@ -398,6 +418,7 @@ function cancelEditKey() {
                 .join(' ') || undefined
             "
             :disabled="disabled || isSaving || isRemoving"
+            @paste="onApiKeyPaste"
             @blur="validateApiKey"
           />
           <p v-if="apiKeyError" :id="apiKeyErrorId" class="text-xs text-destructive">

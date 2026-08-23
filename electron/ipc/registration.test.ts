@@ -18,6 +18,7 @@ import { registerThumbsIpc } from "../thumbs/ipc";
 import { registerCollectionsIpc } from "../workspace/ipc/collections";
 import { registerExportsIpc } from "../workspace/ipc/exports";
 import { registerWorkspaceIpc } from "../workspace/ipc/core";
+import { registerUtilitiesIpc } from "../utilities/ipc";
 import type {
   IpcHandleOptions,
   IpcRegistrar,
@@ -183,6 +184,9 @@ const EXPECTED_IPC_CHANNELS = [
   "thumbs:warmComponents",
   "thumbs:warmLayouts",
   "thumbs:warmPages",
+  "utilities:activate",
+  "utilities:disable",
+  "utilities:inspect",
   "window:close",
   "window:is_fullscreen",
   "window:set_fullscreen",
@@ -282,6 +286,8 @@ const EXPECTED_MUTATION_CHANNELS = [
   "media:save_variant",
   "media:save_variant_with_profile",
   "media:update_grouping",
+  "utilities:activate",
+  "utilities:disable",
   "workspace:confirm_seo_takeover",
   "workspace:create_component",
   "workspace:create_page",
@@ -326,6 +332,7 @@ const registerDomainIpc = [
   registerGitIpc,
   registerTerminalIpc,
   registerAgentIpc,
+  registerUtilitiesIpc,
 ] as const;
 
 describe("main-process IPC registration", () => {

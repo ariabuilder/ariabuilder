@@ -1,11 +1,99 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ComponentThumbReadyPayload } from "@/types/aria";
+import type {
+  ComponentThumbReadyPayload,
+  PageThumbReadyPayload,
+} from "@/types/aria";
 import {
   getComponentThumb,
   invalidateComponentThumbCache,
   onComponentThumbReady,
+  onPageThumbReady,
   peekComponentThumb,
 } from "./thumbs";
+
+describe("page thumb ready subscriptions", () => {
+  const stops: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const stop of stops.splice(0)) stop();
+    vi.unstubAllGlobals();
+  });
+
+  it("shares one IPC listener across subscribers", () => {
+    let readyHandler: ((payload: PageThumbReadyPayload) => void) | undefined;
+    const stopBridge = vi.fn();
+    const onPageReady = vi.fn(
+      (handler: (payload: PageThumbReadyPayload) => void) => {
+        readyHandler = handler;
+        return stopBridge;
+      },
+    );
+    vi.stubGlobal("window", {
+      aria: {
+        thumbs: { onPageReady },
+      },
+    });
+
+    const first = vi.fn();
+    const second = vi.fn();
+    const stopFirst = onPageThumbReady(first);
+    const stopSecond = onPageThumbReady(second);
+    stops.push(stopFirst, stopSecond);
+
+    expect(onPageReady).toHaveBeenCalledTimes(1);
+
+    const payload: PageThumbReadyPayload = {
+      projectPath: "/proj",
+      route: "/about",
+    };
+    readyHandler?.(payload);
+
+    expect(first).toHaveBeenCalledWith(payload);
+    expect(second).toHaveBeenCalledWith(payload);
+
+    stopFirst();
+    expect(stopBridge).not.toHaveBeenCalled();
+    readyHandler?.(payload);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(2);
+
+    stopSecond();
+    expect(stopBridge).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps duplicate callback subscriptions independent", () => {
+    let readyHandler: ((payload: PageThumbReadyPayload) => void) | undefined;
+    const stopBridge = vi.fn();
+    vi.stubGlobal("window", {
+      aria: {
+        thumbs: {
+          onPageReady: (handler: (payload: PageThumbReadyPayload) => void) => {
+            readyHandler = handler;
+            return stopBridge;
+          },
+        },
+      },
+    });
+
+    const handler = vi.fn();
+    const stopFirst = onPageThumbReady(handler);
+    const stopSecond = onPageThumbReady(handler);
+    stops.push(stopFirst, stopSecond);
+    const payload: PageThumbReadyPayload = {
+      projectPath: "/proj",
+      route: "/about",
+    };
+
+    readyHandler?.(payload);
+    expect(handler).toHaveBeenCalledTimes(2);
+    stopFirst();
+    readyHandler?.(payload);
+    expect(handler).toHaveBeenCalledTimes(3);
+    expect(stopBridge).not.toHaveBeenCalled();
+    stopSecond();
+    expect(stopBridge).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("component thumb ready cache", () => {
   let readyHandler: ((payload: ComponentThumbReadyPayload) => void) | undefined;

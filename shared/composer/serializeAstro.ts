@@ -200,7 +200,7 @@ export function serializeNode(
         }
         lines.push(`${indent})}`);
       } else {
-        lines.push(`${indent}{${node.test} ? (`);
+        lines.push(`${indent}{${conditionTest} ? (`);
         for (const child of node.consequent) {
           serializeNode(child, `${indent}  `, lines);
         }

@@ -197,6 +197,35 @@ describe("Astro element conditions", () => {
     });
   });
 
+  it("regenerates managed tests for multi-node ternaries", async () => {
+    const model = await editableModel(
+      `<main><p>One</p><p>Two</p><p>Three</p><p>Four</p></main>`,
+    );
+    expect(wrapNodesInConditionAtPaths(model, ["0.0", "0.1"], "0.0", planIsPro).ok)
+      .toBe(true);
+
+    const main = model.nodes[0];
+    if (main?.kind !== "element" || !main.children) {
+      throw new Error("Expected main children");
+    }
+    const conditional = main.children[0];
+    if (conditional?.kind !== "conditional") {
+      throw new Error("Expected managed conditional");
+    }
+    conditional.mode = "ternary";
+    conditional.test = "staleManagedTest";
+    conditional.alternate = main.children.splice(1, 2);
+
+    const serialized = serializeAstro(model);
+    expect(serialized).toContain('Astro.props?.["plan"] === "pro"');
+    expect(serialized).not.toContain("staleManagedTest");
+
+    const custom = await editableModel(
+      `{customFlag ? (<p>A</p><p>B</p>) : (<p>C</p><p>D</p>)}`,
+    );
+    expect(serializeAstro(custom)).toContain("{customFlag ? (");
+  });
+
   it("keeps hand-written conditions custom and unchanged", async () => {
     const model = await editableModel(`{published && <article>Story</article>}`);
     const condition = model.nodes[0];

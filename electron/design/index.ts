@@ -52,6 +52,7 @@ import {
   stylesheetNeedsAriaBemPrimitives,
   type ManagedBlockModel,
 } from "./managedBlock";
+import { syncManagedTailwindThemeBridge } from "../utilities/themeBridge";
 import { readDesignMeta, writeDesignMeta } from "./meta";
 import { detectIconRuntime } from "./iconRuntime";
 import { resolveProjectIcons, searchProjectIcons } from "./iconProvider";
@@ -777,6 +778,12 @@ export function patchDesignSystem(
 
   const nextContent = applyManagedBlockToFile(existingContent, prior);
   writeTextFileAtomic(absolute, nextContent);
+  try {
+    syncManagedTailwindThemeBridge(root, prior.colors);
+  } catch {
+    // Utility inspection reports missing or edited managed Tailwind setup.
+    // Do not reject a design save after its files have already been persisted.
+  }
 
   return getDesignSnapshot(root);
 }

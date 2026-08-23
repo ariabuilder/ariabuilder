@@ -18,6 +18,7 @@ import { registerDesignIpc } from "../design/ipc";
 import { registerGitIpc } from "../git/ipc";
 import { registerTerminalIpc } from "../terminal/ipc";
 import { registerAgentIpc } from "../agent/ipc";
+import { registerUtilitiesIpc } from "../utilities/ipc";
 import type { IpcRegistrar, IpcRuntimeContext } from "./registrar";
 
 export function registerAllIpc(
@@ -44,4 +45,5 @@ export function registerAllIpc(
   registerGitIpc(registrar, context);
   registerTerminalIpc(registrar, context);
   registerAgentIpc(registrar, context);
+  registerUtilitiesIpc(registrar, context);
 }

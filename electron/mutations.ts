@@ -907,6 +907,8 @@ const MUTATION_CHANNELS = new Set([
   "media:save_variant",
   "media:save_variant_with_profile",
   "media:update_grouping",
+  "utilities:activate",
+  "utilities:disable",
   "workspace:confirm_seo_takeover",
   "workspace:create_component",
   "workspace:duplicate_studio_document",

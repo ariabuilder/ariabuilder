@@ -22,15 +22,6 @@ import { parseManagedConditionExpression } from "../conditions/astro";
 /** Mirrors @astrojs/compiler DiagnosticSeverity.Error (not re-exported from package entry). */
 const DIAGNOSTIC_ERROR = 1;
 
-let nextId = 1;
-function makeId(): string {
-  return `n${nextId++}`;
-}
-
-function resetIds(): void {
-  nextId = 1;
-}
-
 type PositionedCompilerNode = CompilerNode & {
   position?: {
     start?: { offset?: number };
@@ -38,13 +29,16 @@ type PositionedCompilerNode = CompilerNode & {
   };
 };
 
-let sourceByteToUtf16: number[] = [];
+type ParseMappingContext = {
+  nextId: number;
+  sourceByteToUtf16: number[];
+};
 
 /**
  * Astro compiler positions are UTF-8 byte offsets. CodeMirror positions are
  * UTF-16 string offsets, so build the conversion table once per parse.
  */
-function resetSourceOffsets(source: string): void {
+function createParseMappingContext(source: string): ParseMappingContext {
   const encoded = new TextEncoder();
   const table: number[] = [0];
   let byteOffset = 0;
@@ -58,16 +52,23 @@ function resetSourceOffsets(source: string): void {
     utf16Offset += character.length;
     table[byteOffset] = utf16Offset;
   }
-  sourceByteToUtf16 = table;
+  return { nextId: 1, sourceByteToUtf16: table };
 }
 
-function sourceRangeFor(node: CompilerNode): ComposerSourceRange | undefined {
+function makeId(context: ParseMappingContext): string {
+  return `n${context.nextId++}`;
+}
+
+function sourceRangeFor(
+  context: ParseMappingContext,
+  node: CompilerNode,
+): ComposerSourceRange | undefined {
   const position = (node as PositionedCompilerNode).position;
   const start = position?.start?.offset;
   const end = position?.end?.offset;
   if (!Number.isFinite(start) || !Number.isFinite(end)) return undefined;
-  const from = sourceByteToUtf16[Math.max(0, Math.floor(start!))];
-  const to = sourceByteToUtf16[Math.max(0, Math.floor(end!))];
+  const from = context.sourceByteToUtf16[Math.max(0, Math.floor(start!))];
+  const to = context.sourceByteToUtf16[Math.max(0, Math.floor(end!))];
   if (from == null || to == null || to < from) return undefined;
   return { from, to };
 }
@@ -137,7 +138,10 @@ function isWhitespaceOnlyText(node: EditableNode): boolean {
   return node.kind === "text" && !node.value.trim();
 }
 
-function trimStructuralWhitespace(nodes: EditableNode[]): EditableNode[] {
+function trimStructuralWhitespace(
+  context: ParseMappingContext,
+  nodes: EditableNode[],
+): EditableNode[] {
   // Keep significant text; drop pure indent whitespace between block nodes.
   // Boundary spaces inside inline runs are preserved by serialize's inline path.
   const out: EditableNode[] = [];
@@ -160,7 +164,7 @@ function trimStructuralWhitespace(nodes: EditableNode[]): EditableNode[] {
         (next && isInlineish(next))
       ) {
         out.push({
-          id: makeId(),
+          id: makeId(context),
           kind: "text",
           value: " ",
           sourceRange: n.sourceRange,
@@ -248,11 +252,14 @@ function serializeCompilerAttrs(attrs: AttributeNode[]): string {
   return parts.length ? ` ${parts.join(" ")}` : "";
 }
 
-function mapChildren(nodes: CompilerNode[] | undefined): EditableNode[] {
+function mapChildren(
+  context: ParseMappingContext,
+  nodes: CompilerNode[] | undefined,
+): EditableNode[] {
   const mapped = (nodes ?? [])
-    .map((n) => mapNode(n))
+    .map((n) => mapNode(context, n))
     .filter((n): n is EditableNode => n != null);
-  return trimStructuralWhitespace(mapped);
+  return trimStructuralWhitespace(context, mapped);
 }
 
 function isTemplateChild(node: CompilerNode | undefined): boolean {
@@ -265,6 +272,7 @@ function isTemplateChild(node: CompilerNode | undefined): boolean {
 }
 
 function tryMapStructuredExpression(
+  context: ParseMappingContext,
   children: CompilerNode[],
 ): EditableNode | null {
   // Map: text "….map((…) => (" + template nodes + text "))"
@@ -279,14 +287,14 @@ function tryMapStructuredExpression(
       if (headMatch && tailOk) {
         const body = children.slice(1, -1);
         return {
-          id: makeId(),
+          id: makeId(context),
           kind: "map",
-          sourceRange: sourceRangeFor(first),
+          sourceRange: sourceRangeFor(context, first),
           // Keep line boundaries in the callback header. Collapsing all
           // whitespace makes a leading `//` comment consume the `.map(...)`
           // call, leaving its rendered children outside the callback scope.
           head: headMatch[1]!.trim(),
-          children: mapChildren(body),
+          children: mapChildren(context, body),
         };
       }
     }
@@ -303,11 +311,11 @@ function tryMapStructuredExpression(
     if (start && /^\s*\)\s*$/.test(end.value)) {
       const body = significant.slice(1, -1);
       if (body.length > 0 && body.every((child) => child.type !== "text" || !child.value.trim())) {
-        const consequent = mapChildren(body);
+        const consequent = mapChildren(context, body);
         if (consequent.length > 0) {
           const test = start[1]!.trim();
           return {
-            id: makeId(),
+            id: makeId(context),
             kind: "conditional",
             mode: "and",
             test,
@@ -328,11 +336,11 @@ function tryMapStructuredExpression(
         index > 0 && child.type === "text" && /^\s*\)\s*:\s*null\s*$/.test(child.value),
       );
       if (nullTailIndex > 1 && nullTailIndex === significant.length - 1) {
-        const consequent = mapChildren(significant.slice(1, nullTailIndex));
+        const consequent = mapChildren(context, significant.slice(1, nullTailIndex));
         if (consequent.length > 0) {
           const test = start[1]!.trim();
           return {
-            id: makeId(),
+            id: makeId(context),
             kind: "conditional",
             mode: "ternary",
             test,
@@ -353,12 +361,12 @@ function tryMapStructuredExpression(
         && /^\s*\)\s*$/.test(last.value)
         && separatorIndex < significant.length - 2
       ) {
-        const consequent = mapChildren(significant.slice(1, separatorIndex));
-        const alternate = mapChildren(significant.slice(separatorIndex + 1, -1));
+        const consequent = mapChildren(context, significant.slice(1, separatorIndex));
+        const alternate = mapChildren(context, significant.slice(separatorIndex + 1, -1));
         if (consequent.length > 0 && alternate.length > 0) {
           const test = start[1]!.trim();
           return {
-            id: makeId(),
+            id: makeId(context),
             kind: "conditional",
             mode: "ternary",
             test,
@@ -377,10 +385,10 @@ function tryMapStructuredExpression(
     const bare = significant[0].value.match(/^([\s\S]*?)\s*&&\s*$/);
     const paren = significant[0].value.match(/^([\s\S]*?)\s*&&\s*\(\s*$/);
     if (bare && significant.length === 2) {
-      const consequent = mapNode(significant[1]!);
+      const consequent = mapNode(context, significant[1]!);
       if (consequent) {
         return {
-          id: makeId(),
+          id: makeId(context),
           kind: "conditional",
           mode: "and",
           test: bare[1]!.trim(),
@@ -395,10 +403,10 @@ function tryMapStructuredExpression(
       significant[2]?.type === "text" &&
       /^\s*\)\s*$/.test(significant[2].value)
     ) {
-      const consequent = mapNode(significant[1]!);
+      const consequent = mapNode(context, significant[1]!);
       if (consequent) {
         return {
-          id: makeId(),
+          id: makeId(context),
           kind: "conditional",
           mode: "and",
           test: paren[1]!.trim(),
@@ -425,11 +433,11 @@ function tryMapStructuredExpression(
         significant[4]?.type === "text" &&
         /^\s*\)?\s*$/.test(significant[4].value));
     if (testMatch && colonOk && trailing) {
-      const consequent = mapNode(significant[1]!);
-      const alternate = mapNode(significant[3]!);
+      const consequent = mapNode(context, significant[1]!);
+      const alternate = mapNode(context, significant[3]!);
       if (consequent && alternate) {
         return {
-          id: makeId(),
+          id: makeId(context),
           kind: "conditional",
           mode: "ternary",
           test: testMatch[1]!.trim(),
@@ -444,23 +452,27 @@ function tryMapStructuredExpression(
   return null;
 }
 
-function mapExpression(node: CompilerNode & { type: "expression" }): EditableNode {
-  const structured = tryMapStructuredExpression(node.children ?? []);
+function mapExpression(
+  context: ParseMappingContext,
+  node: CompilerNode & { type: "expression" },
+): EditableNode {
+  const structured = tryMapStructuredExpression(context, node.children ?? []);
   if (structured) {
-    structured.sourceRange = sourceRangeFor(node);
+    structured.sourceRange = sourceRangeFor(context, node);
     return structured;
   }
 
   const inner = (node.children ?? []).map(serializeExprChild).join("");
   return {
-    id: makeId(),
+    id: makeId(context),
     kind: "expr",
-    sourceRange: sourceRangeFor(node),
+    sourceRange: sourceRangeFor(context, node),
     value: `{${inner}}`,
   };
 }
 
 function mapTag(
+  context: ParseMappingContext,
   node: CompilerNode & {
     type: "element" | "component" | "custom-element" | "fragment";
     name: string;
@@ -474,14 +486,14 @@ function mapTag(
   if (node.type === "element" && name === "slot") {
     const kids = node.children ?? [];
     return {
-      id: makeId(),
+      id: makeId(context),
       kind: "slot",
-      sourceRange: sourceRangeFor(node),
+      sourceRange: sourceRangeFor(context, node),
       props,
       children:
         kids.length === 0
           ? null
-          : mapChildren(kids),
+          : mapChildren(context, kids),
     };
   }
 
@@ -490,9 +502,9 @@ function mapTag(
       .map((c) => (c.type === "text" ? c.value : serializeExprChild(c)))
       .join("");
     return {
-      id: makeId(),
+      id: makeId(context),
       kind: "raw",
-      sourceRange: sourceRangeFor(node),
+      sourceRange: sourceRangeFor(context, node),
       name,
       props,
       inner,
@@ -501,12 +513,12 @@ function mapTag(
 
   if (node.type === "fragment") {
     return {
-      id: makeId(),
+      id: makeId(context),
       kind: "fragment",
-      sourceRange: sourceRangeFor(node),
+      sourceRange: sourceRangeFor(context, node),
       name: name || "",
       props,
-      children: mapChildren(node.children),
+      children: mapChildren(context, node.children),
     };
   }
 
@@ -525,53 +537,56 @@ function mapTag(
     // Prefer self-closing for components; paired empty for HTML elements.
     children = isComponent ? null : [];
   } else {
-    children = mapChildren(kids);
+    children = mapChildren(context, kids);
   }
 
   return {
-    id: makeId(),
+    id: makeId(context),
     kind,
-    sourceRange: sourceRangeFor(node),
+    sourceRange: sourceRangeFor(context, node),
     name,
     props,
     children,
   };
 }
 
-function mapNode(node: CompilerNode): EditableNode | null {
+function mapNode(
+  context: ParseMappingContext,
+  node: CompilerNode,
+): EditableNode | null {
   switch (node.type) {
     case "frontmatter":
       return null;
     case "text": {
       if (node.value === "") return null;
       return {
-        id: makeId(),
+        id: makeId(context),
         kind: "text",
-        sourceRange: sourceRangeFor(node),
+        sourceRange: sourceRangeFor(context, node),
         value: node.value,
       };
     }
     case "comment":
       return {
-        id: makeId(),
+        id: makeId(context),
         kind: "comment",
-        sourceRange: sourceRangeFor(node),
+        sourceRange: sourceRangeFor(context, node),
         value: node.value,
       };
     case "doctype":
       return {
-        id: makeId(),
+        id: makeId(context),
         kind: "doctype",
-        sourceRange: sourceRangeFor(node),
+        sourceRange: sourceRangeFor(context, node),
         value: node.value,
       };
     case "expression":
-      return mapExpression(node);
+      return mapExpression(context, node);
     case "element":
     case "component":
     case "custom-element":
     case "fragment":
-      return mapTag(node);
+      return mapTag(context, node);
     default:
       // Unknown compiler node → opaque expr-like preservation via comment skip
       return null;
@@ -649,9 +664,6 @@ export async function parseAstro(
   source: string,
   options: ParseAstroOptions = {},
 ): Promise<ParseAstroResult> {
-  resetIds();
-  resetSourceOffsets(source);
-
   if (isMarkdownOrMdx(options.filename)) {
     const bail = {
       code: "markdown_mdx" as const,
@@ -716,7 +728,8 @@ export async function parseAstro(
     }
 
     const { imports, extraFrontmatter } = splitFrontmatter(frontmatterValue);
-    const nodes = mapChildren(bodyNodes);
+    const mappingContext = createParseMappingContext(source);
+    const nodes = mapChildren(mappingContext, bodyNodes);
     const importsByName = Object.fromEntries(imports.map((i) => [i.name, i]));
     markDynamicTags(nodes, importsByName);
     tagLayout(nodes, importsByName);
