@@ -95,7 +95,8 @@ const getKeyLabel = computed(() => {
 })
 
 function validateApiKey() {
-  const trimmed = apiKey.value.trim()
+  const value = apiKey.value
+  const trimmed = value.trim()
   if (!trimmed) {
     apiKeyError.value = "API key is required"
     return
@@ -104,7 +105,7 @@ function validateApiKey() {
     apiKeyError.value = "API key looks too short"
     return
   }
-  if (/\s/.test(trimmed)) {
+  if (/\s/.test(value)) {
     apiKeyError.value = "Remove spaces from the API key"
     return
   }

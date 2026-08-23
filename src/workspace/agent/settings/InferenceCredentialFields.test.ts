@@ -91,13 +91,17 @@ describe("InferenceCredentialFields", () => {
     })
   })
 
-  it("still reports spaces typed into an API key", async () => {
+  it.each([
+    " sk-opencode-key",
+    "sk-opencode-key ",
+    "sk-open code-key",
+  ])("reports whitespace typed into an API key: %j", async (apiKey) => {
     const host = mountCredentialFields()
     const input = host.querySelector<HTMLInputElement>("input[type=password]")
     expect(input).not.toBeNull()
 
     if (input) {
-      input.value = "sk-open code-key"
+      input.value = apiKey
       input.dispatchEvent(new Event("input", { bubbles: true }))
       await nextTick()
       input.dispatchEvent(new Event("blur"))
