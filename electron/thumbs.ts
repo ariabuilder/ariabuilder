@@ -590,6 +590,7 @@ function createCaptureWindow(viewport: CaptureViewport): BrowserWindowType {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      offscreen: true,
       javascript: true,
       images: true,
       webSecurity: true,

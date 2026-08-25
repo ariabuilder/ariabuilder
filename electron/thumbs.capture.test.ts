@@ -160,6 +160,7 @@ describe("clean page thumbnail capture", () => {
       show: false,
       paintWhenInitiallyHidden: true,
       focusable: false,
+      webPreferences: expect.objectContaining({ offscreen: true }),
     });
     expect(win.loadedUrl).toBe("http://127.0.0.1:4321/about");
     expect(win.webContents.capturePage).toHaveBeenCalledWith(
