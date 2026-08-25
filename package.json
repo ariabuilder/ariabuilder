@@ -2,7 +2,7 @@
   "name": "aria-app",
   "productName": "Aria",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Aria — Astro-native visual builder",
   "author": "Statice Origins Inc",
   "license": "Apache-2.0",
