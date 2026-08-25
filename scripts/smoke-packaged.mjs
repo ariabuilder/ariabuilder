@@ -92,7 +92,7 @@ try {
   exitCode = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       killSmokeChild();
-      reject(new Error("Packaged smoke test timed out"));
+      reject(new Error(`Packaged smoke test timed out:\n${output}`));
     }, process.env.ARIA_SMOKE_OPEN ? 120_000 : 30_000);
     child.once("error", (error) => {
       clearTimeout(timeout);

@@ -133,9 +133,11 @@ app.whenReady().then(async () => {
     return;
   }
 
-  applicationUpdater = createApplicationUpdater({
-    requestRestart: shutdownController.requestRestartForUpdate,
-  });
+  if (process.env.ARIA_SMOKE_RENDERER !== "1") {
+    applicationUpdater = createApplicationUpdater({
+      requestRestart: shutdownController.requestRestartForUpdate,
+    });
+  }
   const smokeProject = process.env.ARIA_SMOKE_OPEN?.trim();
   if (smokeProject) trustProject(userDataPath, smokeProject, "smoke");
   windowManager.createWindow(smokeProject);

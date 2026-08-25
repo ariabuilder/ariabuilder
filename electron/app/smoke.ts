@@ -243,6 +243,7 @@ export function createRendererSmokeController(
               })`,
             ),
             "clean page thumbnail capture",
+            30_000,
           );
         } finally {
           await win.webContents.executeJavaScript(
@@ -262,7 +263,7 @@ export function createRendererSmokeController(
                 route: "/",
                 mtimeMs: null,
               }),
-              window.aria.thumbs.getProject(${JSON.stringify(bootProject)}),
+              window.aria.thumbs.getProject(${JSON.stringify(projectSession.path)}),
             ])`,
           ),
           "clean page thumbnail cache lookup",
@@ -277,8 +278,15 @@ export function createRendererSmokeController(
               thumb.dataUrl.startsWith("data:image/png;base64,"),
           );
         if (!thumbnailCaptureOk) {
+          const cacheSummary = Array.isArray(cachedThumbs)
+            ? cachedThumbs.map((thumb) =>
+                thumb && typeof thumb.dataUrl === "string"
+                  ? `data:${thumb.dataUrl.length}`
+                  : "missing",
+              )
+            : ["invalid"];
           throw new Error(
-            "Clean page thumbnail was not cached for page and project",
+            `Clean page thumbnail was not cached for page and project (${cacheSummary.join(", ")})`,
           );
         }
         const pageThumbDataUrl = (
