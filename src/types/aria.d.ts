@@ -1090,6 +1090,14 @@ export type AriaComposerApi = {
     projectPath: string,
     input: import("../../shared/composer").ComposerDataInspectionInput,
   ) => Promise<import("../../shared/composer").ComposerDataInspectionResult>;
+  listProjectData: (
+    projectPath: string,
+    input: import("../../shared/composer").ProjectDataCatalogInput,
+  ) => Promise<import("../../shared/composer").ProjectDataCatalogResult>;
+  editProjectDataCatalogValue: (
+    projectPath: string,
+    input: import("../../shared/composer").ProjectDataCatalogEditInput,
+  ) => Promise<import("../../shared/composer").ProjectDataCatalogEditResult>;
   assessProjectDataAdoption: (
     projectPath: string,
     input: import("../../shared/composer").ProjectDataAdoptionInput,

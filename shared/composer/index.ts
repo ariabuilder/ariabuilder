@@ -54,6 +54,7 @@ export * from "./cmsBindings";
 export * from "./contentBindingSource";
 export * from "./collectionBindings";
 export * from "./projectData";
+export * from "./projectDataBindings";
 export * from "./projectTranslations";
 export * from "./translationBindings";
 export * from "./elementInspector";
@@ -469,6 +470,7 @@ export {
   setTextAtPath,
   setTagAtPath,
 } from "./mutate";
+export * from "./canvasText";
 export type {
   CloneNodeForestOptions,
   CloneNodeForestResult,
@@ -493,6 +495,11 @@ export type {
   AriaDisplayOptionsMessage,
   AriaDropHitMessage,
   AriaHoverMessage,
+  AriaInlineTextChangeMessage,
+  AriaInlineTextFinishMessage,
+  AriaInlineTextRequestMessage,
+  AriaInlineTextResultMessage,
+  AriaInlineTextStartMessage,
   AriaHostToIframeMessage,
   AriaIframeToHostMessage,
   AriaMsgType,
