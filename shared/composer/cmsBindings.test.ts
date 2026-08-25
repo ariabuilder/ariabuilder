@@ -7,6 +7,7 @@ import {
   bindCmsTextAtPath,
   detectCmsContext,
   describeComposerCmsSelection,
+  resolveDirectCmsTextBinding,
   parseCmsContentExposure,
   mapSuggestedCmsFieldsAtPath,
   setCmsContentExposureAtPath,
@@ -83,6 +84,38 @@ describe("Astro-native CMS bindings", () => {
     });
     expect(result.variable).toBe("featuredPost");
     expect(doc.extraFrontmatter).toContain('.find((entry) => (entry.data.slug ?? entry.id) === "hello-world")');
+  });
+
+  it("resolves a managed direct-entry text field for visual editing", async () => {
+    const doc = await model(`---
+import { getCollection } from "astro:content";
+/* @aria-cms-query:hero-copy */
+const heroCopy = (await getCollection("site-copy"))
+  .find((entry) => (entry.data.slug ?? entry.id) === "hero");
+/* @aria-cms-query-end:hero-copy */
+---
+<p class="badge">
+  <span class="badge__dot" />
+  {heroCopy?.data?.["eyebrow"] ?? /* @aria-cms-fallback */ "Fallback"}
+</p>`);
+    expect(resolveDirectCmsTextBinding(doc, "0")).toEqual({
+      path: "0.3",
+      collection: "site-copy",
+      entrySlug: "hero",
+      contextVariable: "heroCopy",
+      field: "eyebrow",
+      contentExposure: "editable",
+    });
+    expect(describeComposerCmsSelection(doc, "0").textTargetPath).toBe("0.3");
+
+    doc.nodes.push((await model(`<a data-button-variant="primary">
+  <Icon />
+  {heroCopy?.data?.["primaryActionLabel"] ?? /* @aria-cms-fallback */ "Download"}
+</a>`)).nodes[0]!);
+    expect(resolveDirectCmsTextBinding(doc, "1")).toMatchObject({
+      path: "1.2",
+      field: "primaryActionLabel",
+    });
   });
 
   it("restores an adopted project-data loop without removing the template", async () => {

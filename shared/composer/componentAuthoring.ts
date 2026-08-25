@@ -56,6 +56,9 @@ export type ComposerCmsEntryTemplatePreviewContext = {
   entries: ComposerCmsPreviewEntry[];
   selectedEntryId: string | null;
   previewRoute: string | null;
+  sourceKind?: import("../types").CollectionSourceKind;
+  writable?: boolean;
+  writableTextFields?: string[];
 };
 
 /** One exact rendered component invocation in an inline editing trail. */

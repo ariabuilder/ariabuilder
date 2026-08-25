@@ -104,6 +104,12 @@ ${MORPHDOM_SOURCE}
     syncMotionAssets: ${JSON.stringify(ARIA_MSG.syncMotionAssets)},
     syncFontStylesheet: ${JSON.stringify(ARIA_MSG.syncFontStylesheet)},
     patchNodes: ${JSON.stringify(ARIA_MSG.patchNodes)},
+    inlineTextRequest: ${JSON.stringify(ARIA_MSG.inlineTextRequest)},
+    inlineTextStart: ${JSON.stringify(ARIA_MSG.inlineTextStart)},
+    inlineTextStartResult: ${JSON.stringify(ARIA_MSG.inlineTextStartResult)},
+    inlineTextChange: ${JSON.stringify(ARIA_MSG.inlineTextChange)},
+    inlineTextFinish: ${JSON.stringify(ARIA_MSG.inlineTextFinish)},
+    inlineTextResult: ${JSON.stringify(ARIA_MSG.inlineTextResult)},
     patchResult: ${JSON.stringify(ARIA_MSG.patchResult)},
     reconcile: ${JSON.stringify(ARIA_MSG.reconcile)},
     reconcileResult: ${JSON.stringify(ARIA_MSG.reconcileResult)},
@@ -312,7 +318,9 @@ ${MORPHDOM_SOURCE}
     const style = document.createElement("style");
     style.id = "aria-design-style";
     style.textContent =
-      "*, *::before, *::after { cursor: default !important; }";
+      "*, *::before, *::after { cursor: default !important; }" +
+      "[data-aria-inline-text] { cursor: text !important; outline: 2px solid var(--aria-composer-accent, #0f9f73) !important; outline-offset: 3px !important; border-radius: 2px; }" +
+      "[data-aria-inline-status] { position: fixed; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }";
     (document.head || document.documentElement)?.appendChild(style);
   };
   const removeDesignStyle = () => {
@@ -327,6 +335,11 @@ ${MORPHDOM_SOURCE}
     activeScope ? p.startsWith(activeScope) : !p.includes("|");
   let lastHoverPath = undefined;
   let lastHoverOcc = 0;
+  let lastSelectedPath = null;
+  let lastSelectedOccurrence = 0;
+  let inlineTextRequestSequence = 0;
+  let pendingInlineTextRequest = null;
+  let activeInlineText = null;
   /** When false, immersive preview — links/forms work; selection chrome sleeps. */
   let designInteractive = true;
   let conditionBranches = [];
@@ -777,7 +790,17 @@ ${MORPHDOM_SOURCE}
       }
       for (const patch of message.patches || []) {
         if (patch.kind !== "properties") continue;
-        for (const run of liveRuns(patch.path, patch.occurrence)) {
+        const patchRuns = liveRuns(patch.path, patch.occurrence);
+        for (let runIndex = 0; runIndex < patchRuns.length; runIndex += 1) {
+          const run = patchRuns[runIndex];
+          const origin = message.inlineTextOrigin;
+          if (
+            activeInlineText && origin &&
+            origin.sessionId === activeInlineText.sessionId &&
+            origin.path === patch.path &&
+            origin.occurrence === activeInlineText.occurrence &&
+            (patch.occurrence == null ? runIndex : patch.occurrence) === activeInlineText.occurrence
+          ) continue;
           let element = firstElement(run);
           if (typeof patch.tagName === "string" && element) {
             const tag = patch.tagName.trim();
@@ -1375,6 +1398,225 @@ ${MORPHDOM_SOURCE}
     return 0;
   };
 
+  const inlineStatus = () => {
+    let status = document.querySelector("[data-aria-inline-status]");
+    if (!status) {
+      status = document.createElement("span");
+      status.setAttribute("data-aria-inline-status", "");
+      status.setAttribute("role", "status");
+      status.setAttribute("aria-live", "polite");
+      (document.body || document.documentElement).appendChild(status);
+    }
+    return status;
+  };
+  const announceInline = (message) => {
+    const status = inlineStatus();
+    status.textContent = "";
+    setTimeout(() => { status.textContent = message; }, 0);
+  };
+  const inlineRunValue = (path, occurrence) =>
+    (liveRuns(path, occurrence)[0] || []).map((node) => node.textContent || "").join("");
+  const clearPendingInlineText = (reason, notifyHost = true) => {
+    const pending = pendingInlineTextRequest;
+    if (!pending) return;
+    pending.imeCapture?.remove();
+    pendingInlineTextRequest = null;
+    if (notifyHost) {
+      window.parent.postMessage({
+        type: MSG.inlineTextStartResult,
+        requestId: pending.requestId,
+        ok: false,
+        ...(reason ? { reason } : {}),
+      }, "*");
+    }
+  };
+  const requestInlineText = (mode, initialInput) => {
+    if (!lastSelectedPath || activeInlineText || pendingInlineTextRequest) return;
+    const requestId = "inline-request-" + (++inlineTextRequestSequence);
+    pendingInlineTextRequest = {
+      requestId,
+      path: lastSelectedPath,
+      occurrence: lastSelectedOccurrence,
+      initialInput,
+      imeCapture: null,
+      imeValue: null,
+      startMessage: null,
+    };
+    window.parent.postMessage({
+      type: MSG.inlineTextRequest,
+      requestId,
+      path: lastSelectedPath,
+      occurrence: lastSelectedOccurrence,
+      mode,
+      ...(typeof initialInput === "string" ? { initialInput } : {}),
+      renderedValue: inlineRunValue(lastSelectedPath, lastSelectedOccurrence),
+    }, "*");
+  };
+  const requestInlineTextFromIme = () => {
+    requestInlineText("replace");
+    const pending = pendingInlineTextRequest;
+    if (!pending) return;
+    const capture = document.createElement("textarea");
+    capture.setAttribute("aria-label", "Canvas text input");
+    capture.setAttribute("tabindex", "-1");
+    capture.setAttribute("autocomplete", "off");
+    capture.setAttribute("autocapitalize", "off");
+    capture.setAttribute("spellcheck", "false");
+    capture.style.cssText = "position:fixed;left:-10000px;top:0;width:1px;height:1px;opacity:0;pointer-events:none";
+    (document.body || document.documentElement).appendChild(capture);
+    pending.imeCapture = capture;
+    capture.focus({ preventScroll: true });
+  };
+  const inlineValue = (session) =>
+    String(session.element.textContent || "")
+      .replace(/\\r\\n?/g, "\\n")
+      .replace(/[\\n\\u2028\\u2029]+/g, " ");
+  const placeInlineCaret = (element, selectAll = false) => {
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    if (!selectAll) range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+  const sendInlineChange = () => {
+    const session = activeInlineText;
+    if (!session || session.composing || session.finishing) return;
+    const value = inlineValue(session);
+    if (session.element.textContent !== value) {
+      session.element.textContent = value;
+      placeInlineCaret(session.element);
+    }
+    for (const path of session.mirrorPaths) {
+      for (const run of liveRuns(path)) {
+        const text = run.find((node) => node?.nodeType === 3) || null;
+        const mirror = text?.parentElement || firstElement(run);
+        if (mirror && mirror !== session.element && !isHydrationOwned(mirror)) {
+          mirror.textContent = value;
+        }
+      }
+    }
+    session.sequence += 1;
+    window.parent.postMessage({
+      type: MSG.inlineTextChange,
+      sessionId: session.sessionId,
+      path: session.path,
+      occurrence: session.occurrence,
+      sequence: session.sequence,
+      value,
+    }, "*");
+  };
+  const finishInlineText = (action) => {
+    const session = activeInlineText;
+    if (!session || session.finishing) return;
+    session.finishing = true;
+    session.sequence += 1;
+    window.parent.postMessage({
+      type: MSG.inlineTextFinish,
+      sessionId: session.sessionId,
+      path: session.path,
+      occurrence: session.occurrence,
+      sequence: session.sequence,
+      value: inlineValue(session),
+      action,
+    }, "*");
+  };
+  const closeInlineText = (value, announcement) => {
+    const session = activeInlineText;
+    if (!session) return;
+    session.element.textContent = value;
+    session.element.removeAttribute("data-aria-inline-text");
+    if (session.hadContenteditable) session.element.setAttribute("contenteditable", session.contenteditable);
+    else session.element.removeAttribute("contenteditable");
+    if (session.hadSpellcheck) session.element.setAttribute("spellcheck", session.spellcheck);
+    else session.element.removeAttribute("spellcheck");
+    if (session.hadTabindex) session.element.setAttribute("tabindex", session.tabindex);
+    else session.element.removeAttribute("tabindex");
+    activeInlineText = null;
+    announceInline(announcement);
+    queueRects();
+  };
+  const startInlineText = (message) => {
+    const pending = pendingInlineTextRequest;
+    if (
+      activeInlineText || !pending || typeof message.path !== "string" ||
+      message.requestId !== pending.requestId || message.occurrence !== pending.occurrence
+    ) {
+      window.parent.postMessage({
+        type: MSG.inlineTextStartResult,
+        requestId: message.requestId,
+        sessionId: message.sessionId,
+        ok: false,
+        reason: "This canvas text request is no longer active.",
+      }, "*");
+      return;
+    }
+    if (pending.imeCapture && pending.imeValue === null) {
+      pending.startMessage = message;
+      return;
+    }
+    const run = liveRuns(message.path, message.occurrence)[0];
+    const text = run?.find((node) => node?.nodeType === 3) || null;
+    const element = text?.parentElement || firstElement(run || []);
+    if (!element || isHydrationOwned(element)) {
+      clearPendingInlineText("The selected text is no longer editable.", false);
+      window.parent.postMessage({
+        type: MSG.inlineTextStartResult,
+        requestId: message.requestId,
+        sessionId: message.sessionId,
+        ok: false,
+        reason: "The selected text is no longer editable.",
+      }, "*");
+      announceInline("The selected text is no longer editable.");
+      return;
+    }
+    const hadTabindex = element.hasAttribute("tabindex");
+    const hadContenteditable = element.hasAttribute("contenteditable");
+    const hadSpellcheck = element.hasAttribute("spellcheck");
+    const initialInput = typeof pending.imeValue === "string"
+      ? pending.imeValue
+      : (typeof message.initialInput === "string" ? message.initialInput : undefined);
+    pending.imeCapture?.remove();
+    pendingInlineTextRequest = null;
+    activeInlineText = {
+      sessionId: message.sessionId,
+      path: message.path,
+      occurrence: message.occurrence,
+      mirrorPaths: Array.isArray(message.mirrorPaths)
+        ? message.mirrorPaths.filter((path) => typeof path === "string")
+        : [message.path],
+      element,
+      originalValue: message.value,
+      sequence: 0,
+      composing: false,
+      finishing: false,
+      hadTabindex,
+      tabindex: element.getAttribute("tabindex") || "",
+      hadContenteditable,
+      contenteditable: element.getAttribute("contenteditable") || "",
+      hadSpellcheck,
+      spellcheck: element.getAttribute("spellcheck") || "",
+    };
+    element.setAttribute("data-aria-inline-text", "");
+    element.setAttribute("contenteditable", "plaintext-only");
+    element.setAttribute("spellcheck", "true");
+    element.setAttribute("tabindex", "-1");
+    element.textContent = typeof initialInput === "string"
+      ? initialInput
+      : message.value;
+    element.focus({ preventScroll: true });
+    placeInlineCaret(element, false);
+    announceInline("Editing text on canvas.");
+    window.parent.postMessage({
+      type: MSG.inlineTextStartResult,
+      requestId: message.requestId,
+      sessionId: message.sessionId,
+      ok: true,
+    }, "*");
+    if (typeof initialInput === "string") sendInlineChange();
+  };
+
   const rectContainsPoint = (rect, x, y) => Boolean(
     rect && Number.isFinite(x) && Number.isFinite(y) &&
     x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom &&
@@ -1518,9 +1760,21 @@ ${MORPHDOM_SOURCE}
       "click",
       (e) => {
         if (!designInteractive) return;
+        if (pendingInlineTextRequest) {
+          clearPendingInlineText("Canvas text editing was canceled.");
+        }
+        if (activeInlineText) {
+          if (activeInlineText.element.contains(e.target)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          finishInlineText("commit");
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         const { path: p, occurrence } = nodeAt(targetAt(e), e.clientX, e.clientY);
+        lastSelectedPath = p || null;
+        lastSelectedOccurrence = occurrence;
         window.parent.postMessage(
           {
             type: MSG.click,
@@ -1539,6 +1793,11 @@ ${MORPHDOM_SOURCE}
       "dblclick",
       (e) => {
         if (!designInteractive) return;
+        if (pendingInlineTextRequest) {
+          clearPendingInlineText("Canvas text editing was canceled.");
+          return;
+        }
+        if (activeInlineText) return;
         e.preventDefault();
         e.stopPropagation();
         const { path: p, occurrence } = nodeAt(targetAt(e), e.clientX, e.clientY);
@@ -1555,8 +1814,46 @@ ${MORPHDOM_SOURCE}
       "keydown",
       (e) => {
         if (!designInteractive) return;
+        if (activeInlineText) {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            finishInlineText("cancel");
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            finishInlineText("commit");
+          } else if (e.key === "Tab") {
+            finishInlineText("commit");
+          }
+          return;
+        }
+        if (pendingInlineTextRequest) {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            clearPendingInlineText("Canvas text editing was canceled.");
+            announceInline("Text edit canceled.");
+          }
+          return;
+        }
         if (isEditableTarget(e.target)) return;
         const mod = e.metaKey || e.ctrlKey;
+        const startsIme = !mod && !e.altKey &&
+          (e.key === "Process" || e.key === "Unidentified" || e.key === "Dead" || e.keyCode === 229);
+        const startsExisting = !mod && !e.altKey && (e.key === "Enter" || e.key === "F2");
+        const startsReplacement = !mod && !e.altKey && e.key.length === 1;
+        if (startsIme) {
+          e.stopPropagation();
+          requestInlineTextFromIme();
+          return;
+        }
+        if (startsExisting || startsReplacement) {
+          e.preventDefault();
+          e.stopPropagation();
+          requestInlineText(startsReplacement ? "replace" : "edit", startsReplacement ? e.key : undefined);
+          return;
+        }
         const isUndoRedo =
           mod &&
           (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y");
@@ -1586,10 +1883,54 @@ ${MORPHDOM_SOURCE}
 
     const isEditableTarget = (target) =>
       target instanceof Element &&
-      !!target.closest("input, textarea, select, [contenteditable='true']");
+      !!target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])");
+    document.addEventListener("input", (e) => {
+      if (activeInlineText?.element.contains(e.target) && !activeInlineText.composing) sendInlineChange();
+    }, true);
+    document.addEventListener("compositionstart", (e) => {
+      if (activeInlineText?.element.contains(e.target)) activeInlineText.composing = true;
+    }, true);
+    document.addEventListener("compositionend", (e) => {
+      const pending = pendingInlineTextRequest;
+      if (pending?.imeCapture === e.target) {
+        pending.imeValue = String(pending.imeCapture.value || e.data || "")
+          .replace(/\\r\\n?/g, "\\n")
+          .replace(/[\\n\\u2028\\u2029]+/g, " ");
+        pending.imeCapture.remove();
+        pending.imeCapture = null;
+        const startMessage = pending.startMessage;
+        pending.startMessage = null;
+        if (startMessage) startInlineText(startMessage);
+        return;
+      }
+      if (!activeInlineText?.element.contains(e.target)) return;
+      activeInlineText.composing = false;
+      sendInlineChange();
+    }, true);
+    document.addEventListener("blur", (e) => {
+      if (activeInlineText?.element === e.target) finishInlineText("commit");
+    }, true);
     window.addEventListener(
       "paste",
       (e) => {
+        if (activeInlineText?.element.contains(e.target)) {
+          const text = (e.clipboardData?.getData("text/plain") || "")
+            .replace(/\\r\\n?/g, "\\n").replace(/[\\n\\u2028\\u2029]+/g, " ");
+          e.preventDefault();
+          const selection = window.getSelection();
+          if (selection?.rangeCount) {
+            const range = selection.getRangeAt(0);
+            range.deleteContents();
+            const node = document.createTextNode(text);
+            range.insertNode(node);
+            range.setStartAfter(node);
+            range.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+          sendInlineChange();
+          return;
+        }
         if (!designInteractive || isEditableTarget(e.target)) return;
         const data = e.clipboardData;
         if (!data) return;
@@ -2088,6 +2429,42 @@ ${MORPHDOM_SOURCE}
       }
       syncFontStylesheet(urls);
     }
+    if (
+      d.type === MSG.inlineTextStart && typeof d.requestId === "string" &&
+      typeof d.sessionId === "string" && typeof d.path === "string" &&
+      Number.isInteger(d.occurrence) && typeof d.value === "string"
+    ) {
+      startInlineText(d);
+    }
+    if (
+      d.type === MSG.inlineTextStartResult && pendingInlineTextRequest &&
+      d.requestId === pendingInlineTextRequest.requestId && d.ok === false
+    ) {
+      const reason = typeof d.reason === "string" ? d.reason : "Canvas text editing could not start.";
+      clearPendingInlineText(reason, false);
+      announceInline(reason);
+    }
+    if (
+      d.type === MSG.inlineTextResult && activeInlineText &&
+      d.sessionId === activeInlineText.sessionId && Number.isInteger(d.sequence)
+    ) {
+      if (d.sequence < activeInlineText.sequence) {
+        return;
+      }
+      if (!d.ok) {
+        closeInlineText(
+          typeof d.value === "string" ? d.value : activeInlineText.originalValue,
+          d.reason || "Text edit failed.",
+        );
+      } else if (d.action === "commit" || d.action === "cancel") {
+        closeInlineText(
+          typeof d.value === "string" ? d.value : inlineValue(activeInlineText),
+          d.action === "cancel"
+            ? "Text edit canceled."
+            : (typeof d.destination === "string" ? d.destination + " saved." : "Text saved."),
+        );
+      }
+    }
     if (d.type === MSG.patchNodes && Number.isFinite(d.revision) && Array.isArray(d.patches)) {
       patchNodes(d);
     }
@@ -2116,7 +2493,11 @@ ${MORPHDOM_SOURCE}
       applyDisplayOptions(d.mode, typeof d.accent === "string" ? d.accent : "");
     }
     if (d.type === MSG.designInteraction && typeof d.enabled === "boolean") {
-      if (!d.enabled) closePreviewPopover();
+      if (!d.enabled) {
+        if (activeInlineText) finishInlineText("commit");
+        if (pendingInlineTextRequest) clearPendingInlineText("Canvas text editing was canceled.");
+        closePreviewPopover();
+      }
       setDesignInteractive(d.enabled);
     }
     if (d.type === MSG.setVh && typeof d.px === "number" && Number.isFinite(d.px)) {
@@ -2125,6 +2506,7 @@ ${MORPHDOM_SOURCE}
   });
 
   const start = () => {
+    inlineStatus();
     installTransientScrollbarStyles();
     applyConditionBranches();
     startOutlines();

@@ -18,6 +18,7 @@ import type {
   PropValue,
 } from "./types";
 import { parseManagedConditionExpression } from "../conditions/astro";
+import { decodeAstroText } from "./astroText";
 
 /** Mirrors @astrojs/compiler DiagnosticSeverity.Error (not re-exported from package entry). */
 const DIAGNOSTIC_ERROR = 1;
@@ -563,7 +564,7 @@ function mapNode(
         id: makeId(context),
         kind: "text",
         sourceRange: sourceRangeFor(context, node),
-        value: node.value,
+        value: decodeAstroText(node.value),
       };
     }
     case "comment":

@@ -15,6 +15,168 @@ class JSDOM extends BaseJSDOM {
 }
 
 describe("Composer design client computed styles", () => {
+  it("keeps the active inline caret occurrence while patching repeated mirrors", async () => {
+    const dom = new JSDOM(`<!doctype html><html><body>
+      <template data-aria-s="0"></template><h1><template data-aria-s="0.0"></template>First<template data-aria-e="0.0"></template></h1><template data-aria-e="0"></template>
+      <template data-aria-s="0"></template><h1><template data-aria-s="0.0"></template>First<template data-aria-e="0.0"></template></h1><template data-aria-e="0"></template>
+    </body></html>`, {
+      url: "http://127.0.0.1:4321/#aria-design",
+      runScripts: "dangerously",
+      pretendToBeVisual: true,
+    })
+    const { window } = dom
+    const rangeRect = { left: 0, top: 0, right: 1, bottom: 1, width: 1, height: 1, x: 0, y: 0, toJSON: () => ({}) }
+    Object.defineProperty(window.Range.prototype, "getBoundingClientRect", {
+      configurable: true,
+      value: () => rangeRect,
+    })
+    Object.defineProperty(window.Range.prototype, "getClientRects", {
+      configurable: true,
+      value: () => [rangeRect],
+    })
+    const changes: Array<Record<string, unknown>> = []
+    const requests: Array<Record<string, unknown>> = []
+    const startResults: Array<Record<string, unknown>> = []
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === ARIA_MSG.inlineTextChange) changes.push(event.data)
+      if (event.data?.type === ARIA_MSG.inlineTextRequest) requests.push(event.data)
+      if (event.data?.type === ARIA_MSG.inlineTextStartResult) startResults.push(event.data)
+    })
+    window.eval(DESIGN_CLIENT_SOURCE)
+    window.document.dispatchEvent(new window.Event("DOMContentLoaded"))
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+
+    const headings = [...window.document.querySelectorAll("h1")]
+    headings[0]!.setAttribute("contenteditable", "false")
+    headings[0]!.setAttribute("spellcheck", "false")
+    headings[0]!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }))
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
+    await vi.waitFor(() => expect(requests).toHaveLength(1))
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "A", bubbles: true }))
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+    expect(requests).toHaveLength(1)
+    window.dispatchEvent(new window.MessageEvent("message", {
+      source: asMessageEventSource(window),
+      data: {
+        type: ARIA_MSG.inlineTextStart,
+        requestId: requests[0]!.requestId,
+        sessionId: "session-1",
+        path: "0.0",
+        occurrence: 0,
+        value: "First",
+      },
+    }))
+    await vi.waitFor(() => expect(startResults).toContainEqual(expect.objectContaining({
+      requestId: requests[0]!.requestId, sessionId: "session-1", ok: true,
+    })))
+    expect(headings[0]?.getAttribute("contenteditable")).toBe("plaintext-only")
+    headings[0]!.textContent = "Edited"
+    headings[0]!.dispatchEvent(new window.InputEvent("input", { bubbles: true }))
+    await vi.waitFor(() => expect(changes).toContainEqual(expect.objectContaining({
+      sessionId: "session-1", value: "Edited", sequence: 1,
+    })))
+    expect(headings[1]?.textContent).toBe("Edited")
+
+    window.dispatchEvent(new window.MessageEvent("message", {
+      source: asMessageEventSource(window),
+      data: {
+        type: ARIA_MSG.patchNodes,
+        revision: 1,
+        inlineTextOrigin: { sessionId: "session-1", path: "0.0", occurrence: 0, sequence: 1 },
+        patches: [{ kind: "properties", path: "0.0", text: "Server value" }],
+      },
+    }))
+    expect(headings[0]?.textContent).toBe("Edited")
+    expect(headings[1]?.textContent).toBe("Server value")
+    window.dispatchEvent(new window.MessageEvent("message", {
+      source: asMessageEventSource(window),
+      data: {
+        type: ARIA_MSG.inlineTextResult,
+        sessionId: "session-1",
+        sequence: 2,
+        ok: true,
+        action: "commit",
+        value: "Edited",
+      },
+    }))
+    expect(headings[0]?.getAttribute("contenteditable")).toBe("false")
+    expect(headings[0]?.getAttribute("spellcheck")).toBe("false")
+    window.dispatchEvent(new window.MessageEvent("message", {
+      source: asMessageEventSource(window),
+      data: {
+        type: ARIA_MSG.inlineTextStart,
+        requestId: requests[0]!.requestId,
+        sessionId: "stale-session",
+        path: "0.0",
+        occurrence: 0,
+        value: "Stale",
+      },
+    }))
+    await vi.waitFor(() => expect(startResults).toContainEqual(expect.objectContaining({
+      sessionId: "stale-session", ok: false,
+    })))
+    expect(headings[0]?.getAttribute("contenteditable")).toBe("false")
+    dom.window.close()
+  })
+
+  it("buffers IME composition until the host approves text editing", async () => {
+    const dom = new JSDOM(`<!doctype html><html><body>
+      <template data-aria-s="0"></template><h1><template data-aria-s="0.0"></template>First<template data-aria-e="0.0"></template></h1><template data-aria-e="0"></template>
+    </body></html>`, {
+      url: "http://127.0.0.1:4321/#aria-design",
+      runScripts: "dangerously",
+      pretendToBeVisual: true,
+    })
+    const { window } = dom
+    const rangeRect = { left: 0, top: 0, right: 1, bottom: 1, width: 1, height: 1, x: 0, y: 0, toJSON: () => ({}) }
+    Object.defineProperty(window.Range.prototype, "getBoundingClientRect", { configurable: true, value: () => rangeRect })
+    Object.defineProperty(window.Range.prototype, "getClientRects", { configurable: true, value: () => [rangeRect] })
+    const requests: Array<Record<string, unknown>> = []
+    const startResults: Array<Record<string, unknown>> = []
+    const changes: Array<Record<string, unknown>> = []
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === ARIA_MSG.inlineTextRequest) requests.push(event.data)
+      if (event.data?.type === ARIA_MSG.inlineTextStartResult) startResults.push(event.data)
+      if (event.data?.type === ARIA_MSG.inlineTextChange) changes.push(event.data)
+    })
+    window.eval(DESIGN_CLIENT_SOURCE)
+    window.document.dispatchEvent(new window.Event("DOMContentLoaded"))
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+    const heading = window.document.querySelector("h1")!
+    heading.dispatchEvent(new window.MouseEvent("click", { bubbles: true }))
+    window.dispatchEvent(new window.KeyboardEvent("keydown", {
+      key: "Process", keyCode: 229, bubbles: true,
+    }))
+    await vi.waitFor(() => expect(requests).toHaveLength(1))
+    const capture = window.document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Canvas text input"]')!
+    expect(capture).toBeTruthy()
+    window.dispatchEvent(new window.MessageEvent("message", {
+      source: asMessageEventSource(window),
+      data: {
+        type: ARIA_MSG.inlineTextStart,
+        requestId: requests[0]!.requestId,
+        sessionId: "ime-session",
+        path: "0.0",
+        occurrence: 0,
+        value: "First",
+      },
+    }))
+    expect(heading.hasAttribute("contenteditable")).toBe(false)
+    capture.value = "日本語"
+    capture.dispatchEvent(new window.CompositionEvent("compositionend", {
+      bubbles: true,
+      data: "日本語",
+    }))
+    await vi.waitFor(() => expect(startResults).toContainEqual(expect.objectContaining({
+      sessionId: "ime-session", ok: true,
+    })))
+    await vi.waitFor(() => expect(changes).toContainEqual(expect.objectContaining({
+      sessionId: "ime-session", value: "日本語",
+    })))
+    expect(heading.textContent).toBe("日本語")
+    dom.window.close()
+  })
+
   it("wraps and unwraps a static node without replacing the live node", async () => {
     const dom = new JSDOM(`<!doctype html><html><body>
       <template data-aria-s="0"></template><div>

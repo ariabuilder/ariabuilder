@@ -176,7 +176,7 @@ describe("Composer design client computed styles", () => {
     expect(destroyMotion).toHaveBeenCalledTimes(1)
     expect((window as unknown as { AriaMotion?: unknown }).AriaMotion).toBeUndefined()
     expect(window.document.querySelector('[data-aria-motion-asset]')).toBeNull()
-    expect(ARIA_PROTOCOL_VERSION).toBe(12)
+    expect(ARIA_PROTOCOL_VERSION).toBe(14)
     dom.window.close()
   })
 

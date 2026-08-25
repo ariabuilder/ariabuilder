@@ -15,9 +15,12 @@ import type {
   ComposerDocumentApi,
   ComposerInsertComponent,
 } from "./useComposerDocument"
+import type { ProjectDataInstanceSegment } from "../../../shared/composer/projectData"
 
 export type ComposerDocumentSession = {
   model: Ref<AstroDocumentModel | null>
+  /** Exact source baseline used by formatting-preserving document mutations. */
+  exactSource: Ref<string | null>
   editable: Ref<boolean>
   mutationPending: ComposerDocumentApi["mutationPending"]
   designActive: Ref<boolean>
@@ -27,6 +30,7 @@ export type ComposerDocumentSession = {
   availableLayouts: Ref<ComposerInsertComponent[]>
   pages: Ref<readonly ScanPage[]>
   documentKind: ComputedRef<"page" | "component" | "layout">
+  instanceChain: ComputedRef<readonly ProjectDataInstanceSegment[]>
   mutateModel: ComposerDocumentApi["mutateModel"]
   commitModelMutation: ComposerDocumentApi["commitModelMutation"]
   withMutationLock: ComposerDocumentApi["withMutationLock"]
@@ -43,9 +47,13 @@ export type ComposerDocumentSession = {
   popoverPreviewTargetId: Ref<string | null>
   previewPopover: (targetId: string | null, open?: boolean) => void
   reloadPreview: () => void
+  reloadDocument: () => Promise<void>
   setSelectedProp: ComposerDocumentApi["setSelectedProp"]
   renameSelectedProp: ComposerDocumentApi["renameSelectedProp"]
   setSelectedText: ComposerDocumentApi["setSelectedText"]
+  beginCanvasTextEdit: ComposerDocumentApi["beginCanvasTextEdit"]
+  updateCanvasTextEdit: ComposerDocumentApi["updateCanvasTextEdit"]
+  finishCanvasTextEdit: ComposerDocumentApi["finishCanvasTextEdit"]
   setSelectedTag: ComposerDocumentApi["setSelectedTag"]
   commitStylesheetEdit: ComposerDocumentApi["commitStylesheetEdit"]
   commitModelWithStylesheet: ComposerDocumentApi["commitModelWithStylesheet"]

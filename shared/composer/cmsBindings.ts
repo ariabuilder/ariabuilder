@@ -67,6 +67,15 @@ export type CmsBindingFormat =
 
 export type CmsContentExposure = "editable" | "locked" | "hidden";
 
+export type DirectCmsTextBinding = {
+  path: string;
+  collection: string;
+  entrySlug: string;
+  contextVariable: string;
+  field: string;
+  contentExposure: CmsContentExposure;
+};
+
 export type CmsBinding = {
   contextVariable: string;
   field: string;
@@ -487,13 +496,64 @@ function expressionField(expression: string, contexts: readonly string[]): strin
   const source = expression.replace(/^\{|\}$/g, "").replace(/\?/g, "");
   for (const context of contexts) {
     const escaped = escapeRegExp(context);
-    const bracket = new RegExp(`\\b${escaped}\\.data(?:\\[(["'])([^"']+)\\1\\]|\\.([a-zA-Z_$][\\w$]*))`).exec(source);
+    const bracket = new RegExp(`\\b${escaped}\\.data(?:\\.?\\[(["'])([^"']+)\\1\\]|\\.([a-zA-Z_$][\\w$]*))`).exec(source);
     if (bracket) return bracket[2] ?? bracket[3] ?? null;
     if (new RegExp(`\\b${escaped}\\.(id|slug|body)\\b`).test(source)) {
       return new RegExp(`\\b${escaped}\\.(id|slug|body)\\b`).exec(source)?.[1] ?? null;
     }
   }
   return null;
+}
+
+function directEntrySlug(
+  frontmatter: string,
+  variable: string,
+): { collection: string; entrySlug: string } | null {
+  const queryId = managedQueryIdForVariable(frontmatter, variable);
+  if (!queryId) return null;
+  const blockPattern = new RegExp(
+    `${escapeRegExp(QUERY_START(queryId))}\\s*const\\s+${escapeRegExp(variable)}\\s*=([\\s\\S]*?)${escapeRegExp(QUERY_END(queryId))}`,
+  );
+  const source = blockPattern.exec(frontmatter)?.[1] ?? "";
+  const collection = /getCollection\(\s*(["'])([^"']+)\1\s*\)/.exec(source)?.[2];
+  const entrySlug = /(?:\.data\??(?:\.slug|\.\[\s*["']slug["']\s*\])|\.slug|\.id)(?:\s*\?\?[^=]+)?\s*===\s*(["'])([^"']+)\1/.exec(source)?.[2];
+  return collection && entrySlug ? { collection, entrySlug } : null;
+}
+
+/** Resolve a managed single-entry CMS text binding without evaluating project code. */
+export function resolveDirectCmsTextBinding(
+  model: AstroDocumentModel,
+  selectedPath: string,
+): DirectCmsTextBinding | null {
+  const selected = locateAtPath(model.nodes, selectedPath)?.node;
+  if (!selected) return null;
+  const expressionPaths = selected.kind === "expr"
+    ? [selectedPath]
+    : selected.kind === "element" || selected.kind === "component"
+      ? (selected.children ?? []).flatMap((child, index) =>
+          child.kind === "expr" && child.value.includes("@aria-cms-fallback")
+            ? [`${selectedPath}.${index}`]
+            : []
+        )
+      : [];
+  if (expressionPaths.length !== 1) return null;
+  const path = expressionPaths[0]!;
+  const node = locateAtPath(model.nodes, path)?.node;
+  if (node?.kind !== "expr") return null;
+  const expression = node.value.replace(/^\{|\}$/g, "");
+  const contextVariable = /\b([a-zA-Z_$][\w$]*)\?*\.data\b/.exec(expression)?.[1];
+  const field = contextVariable ? expressionField(expression, [contextVariable]) : null;
+  if (!contextVariable || !field) return null;
+  const owner = directEntrySlug(model.extraFrontmatter, contextVariable);
+  if (!owner) return null;
+  return {
+    path,
+    collection: owner.collection,
+    entrySlug: owner.entrySlug,
+    contextVariable,
+    field,
+    contentExposure: parseCmsContentExposure(node.value),
+  };
 }
 
 function nodeChildren(node: import("./types").EditableNode): import("./types").EditableNode[] {
@@ -529,9 +589,16 @@ function textTargetPath(
   if (node.kind === "text" || node.kind === "expr") return path;
   if (node.kind !== "element" && node.kind !== "component") return null;
   const children = node.children ?? [];
-  if (children.length !== 1) return null;
-  return children[0]?.kind === "text" || children[0]?.kind === "expr"
-    ? `${path}.0`
+  const managedExpressions = children.flatMap((child, index) =>
+    child.kind === "expr" && child.value.includes("@aria-cms-fallback") ? [index] : []
+  );
+  if (managedExpressions.length === 1) return `${path}.${managedExpressions[0]}`;
+  const meaningful = children.flatMap((child, index) =>
+    child.kind === "text" && !child.value.trim() ? [] : [{ child, index }]
+  );
+  return meaningful.length === 1 &&
+    (meaningful[0]!.child.kind === "text" || meaningful[0]!.child.kind === "expr")
+    ? `${path}.${meaningful[0]!.index}`
     : null;
 }
 

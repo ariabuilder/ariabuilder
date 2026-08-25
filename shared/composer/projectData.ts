@@ -12,6 +12,116 @@ export type ComposerDataShape =
 
 export type ProjectDataSourceRange = { from: number; to: number };
 
+export type ProjectDataCatalogGroupId = "current-item" | "page" | "project";
+export type ProjectDataDerivation = "literal" | "asset" | "derived" | "unresolved";
+export type ProjectDataTargetKind = "text" | "prop" | "collection";
+
+export type ProjectDataCatalogTarget = {
+  kind: ProjectDataTargetKind;
+  propName?: string;
+};
+
+export type ProjectDataInstanceSegment = {
+  ownerFile: string;
+  hostPath: string;
+  occurrence: number;
+};
+
+export type ProjectDataImportBinding = {
+  sourceFile: string;
+  exportName: string;
+  specifier: string;
+  suggestedLocalName: string;
+};
+
+export type ProjectDataCatalogField = {
+  id: string;
+  group: ProjectDataCatalogGroupId;
+  label: string;
+  pathLabel: string;
+  expression: string;
+  shape: ComposerDataShape;
+  derivation: ProjectDataDerivation;
+  valuePath: string[];
+  value?: unknown;
+  compatible: boolean;
+  bindable: boolean;
+  writable: boolean;
+  reason?: string;
+  sourceFile?: string;
+  sourceHash?: string;
+  sourceRange?: ProjectDataSourceRange;
+  rootExport?: string;
+  itemCount?: number;
+  selectedItem?: number;
+  importBinding?: ProjectDataImportBinding;
+  rootId?: string;
+};
+
+export type ProjectDataCatalogRoot = {
+  id: string;
+  group: ProjectDataCatalogGroupId;
+  label: string;
+  expression: string;
+  shape: ComposerDataShape;
+  fieldIds: string[];
+  sourceFile?: string;
+  itemCount?: number;
+};
+
+export type ProjectDataCatalogSource = {
+  id: string;
+  file: string;
+  kind: "astro" | "module" | "json" | "asset";
+  sourceHash?: string;
+  editable: boolean;
+};
+
+export type ProjectDataCatalogGroup = {
+  id: ProjectDataCatalogGroupId;
+  label: string;
+  fields: ProjectDataCatalogField[];
+  roots: ProjectDataCatalogRoot[];
+};
+
+export type ProjectDataCatalogInput = {
+  relativeFile: string;
+  /** Exact source loaded from disk. Source hashes and edit ranges refer to this text. */
+  source: string;
+  /** Current Composer source used only to resolve the selected node and expression. */
+  selectionSource?: string;
+  selectionPath: string;
+  occurrence: number;
+  target: ProjectDataCatalogTarget;
+  instanceChain?: ProjectDataInstanceSegment[];
+  refresh?: boolean;
+};
+
+export type ProjectDataCatalogResult = {
+  groups: ProjectDataCatalogGroup[];
+  sources: ProjectDataCatalogSource[];
+  selectedFieldId?: string;
+  expression?: string;
+  managed: boolean;
+  targetPath: string;
+  target: ProjectDataCatalogTarget;
+  scannedAt: string;
+};
+
+export type ProjectDataCatalogEditInput = {
+  sourceFile: string;
+  expectedSourceHash: string;
+  sourceRange: ProjectDataSourceRange;
+  value: string | number | boolean | null;
+};
+
+export type ProjectDataCatalogEditResult = {
+  ok: true;
+  sourceFile: string;
+  sourceHash: string;
+  value: unknown;
+};
+
 export type ComposerDataBinding = {
   ownership: ComposerDataOwnership;
   expression: string;

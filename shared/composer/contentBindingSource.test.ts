@@ -15,7 +15,7 @@ function model(overrides: Partial<AstroDocumentModel>): AstroDocumentModel {
 }
 
 describe("inferComposerContentBindingSource", () => {
-  it("keeps local project loops collapsed until a CMS bind is explicit", () => {
+  it("opens project data for local loop fields", () => {
     const doc = model({
       extraFrontmatter: "const { title, text, data, type = 'left', classes } = Astro.props",
       nodes: [{
@@ -36,8 +36,8 @@ describe("inferComposerContentBindingSource", () => {
       }],
     })
 
-    expect(inferComposerContentBindingSource(doc, "0")).toBe("none")
-    expect(inferComposerContentBindingSource(doc, "0.0")).toBe("none")
+    expect(inferComposerContentBindingSource(doc, "0")).toBe("project")
+    expect(inferComposerContentBindingSource(doc, "0.0")).toBe("project")
   })
 
   it("opens Aria CMS for managed collection loops", () => {
@@ -82,6 +82,25 @@ describe("inferComposerContentBindingSource", () => {
     expect(inferComposerContentBindingSource(doc, "0")).toBe("translations")
   })
 
+  it("keeps a managed project data property out of the CMS heuristic", () => {
+    const doc = model({
+      nodes: [{
+        id: "title",
+        kind: "expr",
+        value: '{project.data.title ?? /* @aria-project-fallback */ "Original"}',
+      }],
+    })
+    expect(inferComposerContentBindingSource(doc, "0")).toBe("project")
+  })
+
+  it("keeps a hand-written local data property out of the CMS heuristic", () => {
+    const doc = model({
+      extraFrontmatter: "const project = { data: { title: 'Local' } }",
+      nodes: [{ id: "title", kind: "expr", value: "{project.data.title}" }],
+    })
+    expect(inferComposerContentBindingSource(doc, "0")).toBe("project")
+  })
+
   it("leaves static authored copy on None", () => {
     const doc = model({
       nodes: [{
@@ -94,5 +113,19 @@ describe("inferComposerContentBindingSource", () => {
     })
 
     expect(inferComposerContentBindingSource(doc, "0")).toBe("none")
+  })
+
+  it("recognizes expressions that use imported project data", () => {
+    const doc = model({
+      imports: [{ name: "featuresData", path: "../data/features.json" }],
+      nodes: [{
+        id: "heading",
+        kind: "element",
+        name: "h2",
+        props: {},
+        children: [{ id: "title", kind: "expr", value: "{featuresData[0].title}" }],
+      }],
+    })
+    expect(inferComposerContentBindingSource(doc, "0")).toBe("project")
   })
 })

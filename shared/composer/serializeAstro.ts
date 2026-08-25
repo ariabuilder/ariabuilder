@@ -10,6 +10,7 @@ import type {
   PropValue,
 } from "./types";
 import { managedConditionExpression } from "../conditions/astro";
+import { encodeAstroText } from "./astroText";
 
 function serializePropValue(name: string, v: PropValue): string {
   if (v.type === "bare") return name;
@@ -57,7 +58,7 @@ function isInlineRun(nodes: EditableNode[]): boolean {
 function inlineString(nodes: EditableNode[]): string {
   let out = "";
   for (const n of nodes) {
-    if (n.kind === "text") out += n.value;
+    if (n.kind === "text") out += encodeAstroText(n.value);
     else if (n.kind === "expr") out += n.value;
     else if (n.kind === "element") {
       if (n.children === null || n.children.length === 0) {
@@ -124,9 +125,28 @@ export function serializeNode(
   lines: string[],
 ): void {
   switch (node.kind) {
-    case "text":
-      lines.push(indent + node.value);
+    case "text": {
+      if (!node.value.trim()) return;
+      if (!node.value.includes("\n") && !node.value.includes("\r")) {
+        lines.push(indent + encodeAstroText(node.value));
+        return;
+      }
+      const valueLines = node.value.split(/\r?\n/);
+      while (valueLines.length && !valueLines[0]!.trim()) valueLines.shift();
+      while (valueLines.length && !valueLines[valueLines.length - 1]!.trim()) {
+        valueLines.pop();
+      }
+      if (!valueLines.length) return;
+      const commonIndent = Math.min(
+        ...valueLines
+          .filter((line) => line.trim())
+          .map((line) => /^\s*/.exec(line)?.[0].length ?? 0),
+      );
+      for (const line of valueLines) {
+        lines.push(indent + encodeAstroText(line.slice(commonIndent)));
+      }
       return;
+    }
     case "expr": {
       const exprLines = node.value.split("\n");
       lines.push(indent + exprLines[0]);
@@ -333,6 +353,15 @@ function slotAttrFor(node: EditableNode): string {
   return "";
 }
 
+const HTML_RCDATA_ELEMENTS = new Set(["title", "textarea"]);
+
+function isHtmlRcdataElement(node: EditableNode): boolean {
+  return (
+    node.kind === "element" &&
+    HTML_RCDATA_ELEMENTS.has(node.name.toLowerCase())
+  );
+}
+
 function serializeNodeMarked(
   node: EditableNode,
   indent: string,
@@ -344,7 +373,11 @@ function serializeNodeMarked(
     `${indent}<template${slotAttr} ${ARIA_MARKER_START}="${path}"></template>`,
   );
 
-  if (
+  if (isHtmlRcdataElement(node)) {
+    // HTML parses markup inside title/textarea as text. Nested marker templates
+    // would therefore leak into document.title or the textarea's initial value.
+    serializeNode(node, indent, lines);
+  } else if (
     (node.kind === "component" || node.kind === "element") &&
     !(node.kind === "component" && (node.chunkFile || node.chunkAggregate)) &&
     Array.isArray(node.children) &&

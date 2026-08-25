@@ -197,7 +197,7 @@ describe("ComposerPropsPanel prop schema lifecycle", () => {
     expect(host.querySelector("[data-content-binding-source]")?.getAttribute("data-content-binding-source")).toBe("cms")
   })
 
-  it("keeps unbound project loops on None until a source is chosen", async () => {
+  it("infers project data for an existing local loop without expanding the section", async () => {
     const { host } = mountPanel({
       model: {
         imports: [],
@@ -225,7 +225,7 @@ describe("ComposerPropsPanel prop schema lifecycle", () => {
     })
     await nextTick()
 
-    expect(host.querySelector("[data-content-binding-source]")?.getAttribute("data-content-binding-source")).toBe("none")
+    expect(host.querySelector("[data-content-binding-source]")?.getAttribute("data-content-binding-source")).toBe("project")
     expect(host.textContent).toContain("Content binding")
     expect(
       host.querySelector('[data-inspector-section="Content binding"]')

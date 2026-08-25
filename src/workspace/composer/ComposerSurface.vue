@@ -73,6 +73,7 @@ import {
 } from "./useComposerDocument"
 import { useComposerCodeSession } from "./useComposerCodeSession"
 import { useComposerPreviewCoordinator } from "./useComposerPreviewCoordinator"
+import { provideComposerCanvasTextDraft } from "./useComposerCanvasTextDraft"
 import { useAgentComposerHost } from "./useAgentComposerHost"
 import {
   clearAgentSurfaceContext,
@@ -344,6 +345,7 @@ const codeLayout = ref<ComposerCodeLayout>(
 const editStack = useComposerEditStack()
 const componentPreviewSession = ref<ComposerComponentPreviewSession | null>(null)
 const cmsEntryTemplatePreview = ref<ComposerCmsEntryTemplatePreviewContext | null>(null)
+const canvasTextDraft = provideComposerCanvasTextDraft()
 const hardReloadRevision = ref(0)
 
 watch(
@@ -591,7 +593,11 @@ function filterLayerRows(rows: ComposerLayerRow[]): ComposerLayerRow[] {
       row.synthetic &&
       row.treeKey.startsWith("slot-group:")
     ) return children.map((child) => ({ ...child, draggable: false }))
-    return [{ ...row, children }]
+    const draft = canvasTextDraft.session.value
+    const label = draft?.visibleOwnerPath === row.path
+      ? (draft.draft.length > 30 ? `${draft.draft.slice(0, 29)}…` : draft.draft || "Text")
+      : row.label
+    return [{ ...row, label, children }]
   })
 }
 
@@ -772,6 +778,9 @@ const {
   setSelectedProp,
   renameSelectedProp,
   setSelectedText,
+  beginCanvasTextEdit,
+  updateCanvasTextEdit,
+  finishCanvasTextEdit,
   setSelectedTag,
   commitStylesheetEdit,
   commitModelWithStylesheet,
@@ -783,6 +792,8 @@ const {
   model,
   editable: isEditable,
   designActive: isDesignMode,
+  exactSource: codeSession.appliedSource,
+  onExactSourcePersisted: codeSession.markVisualSourcePersisted,
   stagedSource,
   codeDirty: codeSession.dirty,
   onStagedSourceChange: codeSession.updateSourceFromVisualMutation,
@@ -790,10 +801,15 @@ const {
   draftHistoryBlocked: codeSession.hasStagedStylesheets,
   previewRevision: previewCoordinator.revision,
   reservePreviewRevision: previewCoordinator.reserveRevision,
-  onModelMutation: (before, after, reservedRevision) => previewCoordinator.applyModelMutation(
+  onModelMutation: (before, after, reservedRevision, exactSource, inlineTextOrigin) => previewCoordinator.applyModelMutation(
     before,
     after,
-    { writeDraft: stagedSource.value == null, revision: reservedRevision },
+    {
+      writeDraft: stagedSource.value == null,
+      revision: reservedRevision,
+      source: exactSource,
+      inlineTextOrigin,
+    },
   ),
   onPersisted: (result) => {
     if (result.runtimeAssetsChanged && model.value) {
@@ -942,6 +958,7 @@ onUnmounted(() => {
 
 provideComposerDocument({
   model,
+  exactSource: codeSession.appliedSource,
   editable: interactionEditable,
   mutationPending,
   designActive: isDesignMode,
@@ -953,6 +970,7 @@ provideComposerDocument({
   ),
   pages: computed(() => props.pages),
   documentKind: computed(() => editStack.current.value?.kind ?? "page"),
+  instanceChain: computed(() => editStack.current.value?.instanceChain ?? []),
   mutateModel,
   commitModelMutation,
   withMutationLock,
@@ -965,9 +983,15 @@ provideComposerDocument({
   popoverPreviewTargetId,
   previewPopover,
   reloadPreview: () => { hardReloadRevision.value += 1 },
+  reloadDocument: async () => {
+    if (editFile.value) await loadEditFile(editFile.value, { force: true })
+  },
   setSelectedProp,
   renameSelectedProp,
   setSelectedText,
+  beginCanvasTextEdit,
+  updateCanvasTextEdit,
+  finishCanvasTextEdit,
   setSelectedTag,
   commitStylesheetEdit,
   commitModelWithStylesheet,
@@ -1829,6 +1853,17 @@ function selectCmsPreviewEntry(entryId: string) {
   }
 }
 
+function updateCmsPreviewEntry(payload: { entryId: string; title?: string }) {
+  const context = cmsEntryTemplatePreview.value
+  if (!context) return
+  cmsEntryTemplatePreview.value = {
+    ...context,
+    entries: context.entries.map((entry) => entry.id === payload.entryId
+      ? { ...entry, ...(payload.title !== undefined ? { title: payload.title } : {}) }
+      : entry),
+  }
+}
+
 async function onSurfaceMode(mode: ComposerSurfaceMode) {
   if (mode === surfaceMode.value) return
   if (mode === "code" && !codeSession.dirty.value) {
@@ -2302,6 +2337,7 @@ onUnmounted(() => {
                 :design-mode="true"
                 :canvas-active="showStage && !isPreviewImmersive && active !== false"
                 :font-stylesheet-urls="composerFontStylesheetUrlsValue"
+                :cms-entry-template-preview="cmsEntryTemplatePreview"
                 :path-scope="editStack.pathScope.value"
                 :focus-path="editStack.focusPath.value"
                 :empty-document="interactionEditable && (model?.nodes.length ?? 0) === 0"
@@ -2315,6 +2351,7 @@ onUnmounted(() => {
                 @patch-result="previewCoordinator.onPatchResult"
                 @reconcile-result="previewCoordinator.onReconcileResult"
                 @hard-reload="hardReloadRevision += 1"
+                @cms-entry-updated="updateCmsPreviewEntry"
               />
               <ComposerBreakpointBoard
                 v-if="showStage && isPreviewImmersive"

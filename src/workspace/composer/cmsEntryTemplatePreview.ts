@@ -71,6 +71,16 @@ export async function createCmsEntryTemplateLaunch(
     entries,
     selectedEntryId: selected?.id ?? null,
     previewRoute: selected?.route ?? null,
+    sourceKind: collection.source?.kind ?? "aria-managed",
+    writable: !collection.source || (
+      collection.source.kind === "aria-managed" && !collection.source.readOnly
+    ),
+    writableTextFields: [
+      "title",
+      ...(collection.schema?.fields ?? [])
+        .filter((field) => field.type === "string" || field.type === "text")
+        .map((field) => field.key),
+    ],
   }
   return {
     mode: "cms-entry-template",

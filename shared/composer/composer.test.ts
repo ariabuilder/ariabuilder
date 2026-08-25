@@ -287,6 +287,32 @@ const amount = "132K";
     const reparsed = await parseAstro(marked);
     expect(reparsed.editable).toBe(true);
   });
+
+  it("keeps marker templates out of HTML RCDATA content", async () => {
+    const result = await parseAstro(`---
+const pageTitle = "Contact";
+---
+<html>
+  <head><title>{pageTitle} | Geo-Environmental Drilling Inc.</title></head>
+  <body><textarea>Request a quote</textarea></body>
+</html>
+`);
+    expect(result.editable).toBe(true);
+    if (!result.editable) return;
+
+    const clean = serializeAstro(result.model);
+    const marked = serializeAstroMarked(result.model);
+    for (const tag of ["title", "textarea"]) {
+      const content = (source: string) =>
+        source.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1];
+      expect(content(marked)).toBe(content(clean));
+      expect(content(marked)).not.toContain("data-aria-");
+    }
+
+    expect(marked).toMatch(/data-aria-s="[^"]+"><\/template>\n\s*<title>/);
+    const reparsed = await parseAstro(marked);
+    expect(reparsed.editable).toBe(true);
+  });
 });
 
 describe("extractPropSchema", () => {
@@ -375,6 +401,20 @@ describe("resolveRawChunks", () => {
 });
 
 describe("corpus coverage gate", () => {
+  it("does not accumulate structural whitespace beside inline svg markup", async () => {
+    let source = `---\n---\n<a href="/">\n  Read\n  <svg><path d="x" /></svg>\n</a>\n`;
+    let stable: string | null = null;
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      const parsed = await parseAstro(source);
+      if (!parsed.editable) throw new Error(parsed.reason);
+      source = serializeAstro(parsed.model);
+      if (cycle === 0) stable = source;
+      else expect(source).toBe(stable);
+    }
+    expect(source).not.toMatch(/^\s+$/m);
+    expect(source).toContain("Read");
+  });
+
   it("tracks editable + stable round-trip rates across fixture corpus", async () => {
     const files: string[] = [];
     for (const dir of ["synthetic", "starters"] as const) {

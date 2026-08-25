@@ -21,6 +21,7 @@ import {
   getElementPropsSchema,
   nodeAtMarkerPath,
   parseCmsContentExposure,
+  resolveDirectCmsTextBinding,
   setCmsContentExposureAtPath,
   unwrapCmsLoop,
   unbindCmsPropAtPath,
@@ -90,7 +91,10 @@ const selectedNode = computed(() => selectedPath.value && doc?.model.value ? nod
 const selection = computed(() => doc?.model.value && selectedPath.value
   ? describeComposerCmsSelection(doc.model.value, selectedPath.value)
   : null)
-const bindingTargetPath = computed(() => selection.value?.textTargetPath ?? selectedPath.value)
+const directTextBinding = computed(() => doc?.model.value && selectedPath.value
+  ? resolveDirectCmsTextBinding(doc.model.value, selectedPath.value)
+  : null)
+const bindingTargetPath = computed(() => directTextBinding.value?.path ?? selection.value?.textTargetPath ?? selectedPath.value)
 const collection = computed(() => collections.value.find((item) => item.id === collectionId.value || item.name === collectionId.value) ?? null)
 const detectedCollections = computed(() =>
   doc?.model.value && selectedPath.value
@@ -173,7 +177,7 @@ const inheritedSource = computed(() => mode.value === "context" && contexts.valu
 const sourceSummary = computed(() => {
   if (isLoop.value) return selection.value?.summary ?? "Collection loop"
   const source = detectedCollectionLabel.value || collection.value?.label || collectionId.value
-  const detail = selection.value?.field || field.value
+  const detail = directTextBinding.value?.field || selection.value?.field || field.value
   return [source, detail].filter(Boolean).join(" · ")
 })
 const compatibleFields = computed(() => {
@@ -216,7 +220,7 @@ watch(collection, (next) => {
   entryLoadGeneration += 1
   entries.value = []
   discoveredFields.value = []
-  entrySlug.value = ""
+  entrySlug.value = directTextBinding.value?.entrySlug ?? ""
   error.value = ""
   if (!field.value || !fields.value.some((item) => item.key === field.value)) field.value = fields.value[0]?.key ?? ""
   if (!filterField.value) filterField.value = fields.value[0]?.key ?? ""
@@ -233,14 +237,22 @@ watch(mode, (next) => {
   if (next === "entry") void loadEntries()
 })
 watch(() => props.initialMode, (next) => { mode.value = next })
-watch(selectedPath, () => {
-  mode.value = selectedNode.value?.kind === "map"
+watch([selectedPath, directTextBinding], () => {
+  const binding = directTextBinding.value
+  mode.value = binding
+    ? "entry"
+    : selectedNode.value?.kind === "map"
     ? "loop"
     : contexts.value.length
       ? "context"
       : props.initialMode === "context"
       ? "entry"
         : props.initialMode
+  if (binding) {
+    collectionId.value = binding.collection
+    entrySlug.value = binding.entrySlug
+    field.value = binding.field
+  }
   targetProp.value = props.initialTargetProp ?? propTargets.value[0] ?? ""
 }, { immediate: true })
 watch(() => props.active, (active) => {
@@ -301,7 +313,7 @@ async function initializeBindingUi() {
     const detected = detectedCollections.value
       .map((name) => collections.value.find((item) => item.name === name))
       .find(Boolean)
-    collectionId.value ||= detected?.id ?? collections.value[0]?.id ?? ""
+    collectionId.value ||= directTextBinding.value?.collection ?? detected?.id ?? collections.value[0]?.id ?? ""
     initialized.value = true
   } catch (cause) {
     if (generation === initializationGeneration) {

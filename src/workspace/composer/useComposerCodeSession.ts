@@ -292,6 +292,12 @@ export function useComposerCodeSession(options: {
     scheduleAnalysis({ keepStatus: true })
   }
 
+  function markVisualSourcePersisted(source: string): void {
+    appliedSource.value = source
+    workingSource.value = source
+    clearRecovery()
+  }
+
   function stageStylesheetEdit(
     edit: ComposerStylesheetEdit & { beforeContent: string },
   ): void {
@@ -405,6 +411,7 @@ export function useComposerCodeSession(options: {
     loadDocument,
     updateSource,
     updateSourceFromVisualMutation,
+    markVisualSourcePersisted,
     stageStylesheetEdit,
     analyzeNow,
     apply,
