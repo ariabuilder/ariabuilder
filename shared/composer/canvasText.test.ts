@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { canvasTextMirrorPaths, resolveCanvasTextTarget } from "./canvasText"
+import { canvasTextMirrorPaths, isWritableCmsTextOwner, replaceConnectedTextWithStatic, resolveCanvasTextTarget } from "./canvasText"
 import { ARIA_MSG, isAriaIframeToHostMessage, isAriaProtocolMessage } from "./protocol"
 import type { AstroDocumentModel } from "./types"
 import { parseAstro } from "./parseAstro"
@@ -65,6 +65,55 @@ describe("resolveCanvasTextTarget", () => {
       id: "heading", kind: "element", name: "h1", props: {},
       children: [{ id: "expression", kind: "expr", value: "{formatTitle(title)}" }],
     }]), "0", "Formatted")).toMatchObject({ kind: "detach-required" })
+  })
+
+  it("replaces only the connected expression while preserving its source range", () => {
+    const document = model([{
+      id: "heading", kind: "element", name: "h1", props: {}, children: [
+        { id: "space", kind: "text", value: " " },
+        { id: "connected", kind: "expr", value: "{entry.data.title}", sourceRange: { start: 4, end: 22 } },
+      ],
+    }])
+    expect(replaceConnectedTextWithStatic(document, "0.1", "Static title", "0")).toEqual({
+      ok: true,
+      selectPath: "0",
+    })
+    expect(document.nodes[0]?.kind === "element" && document.nodes[0].children?.[1]).toEqual({
+      id: "connected",
+      kind: "text",
+      value: "Static title",
+      sourceRange: { start: 4, end: 22 },
+    })
+  })
+
+  it("allows CMS owner writes only for the exact writable entry preview", () => {
+    const document = {
+      ...model([]),
+      collectionBindings: {
+        heroCopy: { collections: ["site-copy"], cardinality: "one" as const },
+      },
+    }
+    const target = {
+      collection: "site-copy",
+      contextVariable: "heroCopy",
+      field: "description",
+      contentExposure: "editable" as const,
+    }
+    const context = {
+      collectionId: "site-copy-id",
+      collectionName: "site-copy",
+      collectionLabel: "Site Copy",
+      templateFile: "src/pages/index.astro",
+      entries: [{ id: "hero-id", slug: "hero", title: "Hero", route: "/" }],
+      selectedEntryId: "hero-id",
+      previewRoute: "/",
+      sourceKind: "aria-managed" as const,
+      writable: true,
+      writableTextFields: ["description"],
+    }
+    expect(isWritableCmsTextOwner(document, target, context)).toBe(true)
+    expect(isWritableCmsTextOwner(document, target, { ...context, writable: false })).toBe(false)
+    expect(isWritableCmsTextOwner(document, target, { ...context, selectedEntryId: null })).toBe(false)
   })
 
   it("finds every matching bound expression in the open document", () => {

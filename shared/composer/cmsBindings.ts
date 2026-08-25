@@ -73,12 +73,27 @@ export type DirectCmsTextBinding = {
   entrySlug: string;
   contextVariable: string;
   field: string;
+  relation?: CmsRelationTraversal;
   contentExposure: CmsContentExposure;
+};
+
+export type DirectCmsPropBinding = DirectCmsTextBinding & {
+  propName: string;
+};
+
+export type CmsRelationTraversal = {
+  sourceField: string;
+  targetCollection: string;
+  targetField: string;
+  kind: "reference" | "relation";
+  index?: number;
+  lookupVariable: string;
 };
 
 export type CmsBinding = {
   contextVariable: string;
   field: string;
+  relation?: CmsRelationTraversal;
   format?: CmsBindingFormat;
   contentExposure?: CmsContentExposure;
   fallback?: PropValue;
@@ -93,7 +108,10 @@ export type CmsMutationResult = {
 
 const QUERY_START = (id: string) => `/* @aria-cms-query:${id} */`;
 const QUERY_END = (id: string) => `/* @aria-cms-query-end:${id} */`;
+const LOOKUP_START = (id: string) => `/* @aria-cms-lookup:${id} */`;
+const LOOKUP_END = (id: string) => `/* @aria-cms-lookup-end:${id} */`;
 const FALLBACK_MARKER = "/* @aria-cms-fallback */";
+const FIELD_MARKER = (field: string) => `/* @aria-cms-field:${field.replace(/\*\//g, "")} */`;
 const CONTENT_EXPOSURE_PATTERN = /\/\*\s*@aria-content:(editable|locked|hidden)\s*\*\/\s*/g;
 
 function identifier(value: string, fallback = "value"): string {
@@ -127,6 +145,13 @@ function fieldAccess(variable: string, field: string): string {
   );
 }
 
+function plainFieldAccess(variable: string, field: string): string {
+  return field.split(".").filter(Boolean).reduce(
+    (expr, segment) => `${expr}?.[${js(segment)}]`,
+    variable,
+  );
+}
+
 function propFallback(value: PropValue | undefined): string | null {
   if (!value) return null;
   switch (value.type) {
@@ -148,13 +173,32 @@ function formatExpression(expression: string, format: CmsBindingFormat = "plain"
 }
 
 export function compileCmsBindingExpression(binding: CmsBinding): string {
-  const source = fieldAccess(identifier(binding.contextVariable, "entry"), binding.field);
+  const context = identifier(binding.contextVariable, "entry");
+  const directSource = fieldAccess(context, binding.field);
+  const relationId = binding.relation
+    ? fieldAccess(context, binding.relation.sourceField)
+    : "";
+  const relatedId = binding.relation?.kind === "relation"
+    ? `(Array.isArray(${relationId}) ? ${relationId}[${Math.max(0, Math.floor(binding.relation.index ?? 0))}] : undefined)`
+    : relationId;
+  const relatedKey = binding.relation
+    ? `((${relatedId})?.id ?? (${relatedId})?.slug ?? (${relatedId})?.ariaEntryId ?? ${relatedId})`
+    : "";
+  const relatedEntry = binding.relation
+    ? `${identifier(binding.relation.lookupVariable, "ariaCmsLookup")}.get(String(${relatedKey} ?? ""))`
+    : "";
+  const source = binding.relation
+    ? plainFieldAccess(relatedEntry, binding.relation.targetField)
+    : directSource;
   const formatted = formatExpression(source, binding.format);
   const fallback = propFallback(binding.fallback);
   const expression = fallback ? `${formatted} ?? ${FALLBACK_MARKER} ${fallback}` : formatted;
-  return binding.contentExposure
-    ? `/* @aria-content:${binding.contentExposure} */ ${expression}`
+  const marked = binding.relation || binding.field.includes(".")
+    ? `${FIELD_MARKER(binding.field)} ${expression}`
     : expression;
+  return binding.contentExposure
+    ? `/* @aria-content:${binding.contentExposure} */ ${marked}`
+    : marked;
 }
 
 export function parseCmsContentExposure(expression: string): CmsContentExposure {
@@ -249,6 +293,63 @@ export function upsertCmsCollectionQuery(
     ? imported.replace(pattern, block)
     : `${imported.trim()}${imported.trim() ? "\n\n" : ""}${block}`;
   return { variable: compiled.variable, entryVariable: compiled.entryVariable };
+}
+
+function lookupId(collection: string): string {
+  return identifier(collection, "collection");
+}
+
+function lookupVariableForId(frontmatter: string, id: string): string | null {
+  const pattern = new RegExp(`${escapeRegExp(LOOKUP_START(id))}\\s*const\\s+([a-zA-Z_$][\\w$]*)\\s*=`);
+  return pattern.exec(frontmatter)?.[1] ?? null;
+}
+
+function uniqueLookupVariable(frontmatter: string, collection: string): string {
+  const base = identifier(`aria cms ${collection} by id`, "ariaCmsEntriesById");
+  if (!new RegExp(`\\b${escapeRegExp(base)}\\b`).test(frontmatter)) return base;
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${base}${index}`;
+    if (!new RegExp(`\\b${escapeRegExp(candidate)}\\b`).test(frontmatter)) return candidate;
+  }
+  return `${base}${Date.now().toString(36)}`;
+}
+
+/** Add or reuse an Astro lookup for one related collection. */
+export function upsertCmsRelationLookup(
+  model: AstroDocumentModel,
+  collection: string,
+): string {
+  const id = lookupId(collection);
+  const existing = lookupVariableForId(model.extraFrontmatter, id);
+  if (existing) return existing;
+  const variable = uniqueLookupVariable(model.extraFrontmatter, collection);
+  const block = `${LOOKUP_START(id)}\nconst ${variable} = new Map((await getCollection(${js(collection)})).flatMap((entry) => {\n  const value = { ...entry.data, id: entry.id, slug: entry.data.slug ?? entry.id, title: entry.data.title ?? entry.id, body: entry.body, ariaEntryId: entry.data.ariaEntryId };\n  return [entry.id, entry.data.slug, entry.data.ariaEntryId].filter(Boolean).map((key) => [String(key), value]);\n}));\n${LOOKUP_END(id)}`;
+  const imported = ensureGetCollectionImport(model.extraFrontmatter);
+  model.extraFrontmatter = `${imported.trim()}${imported.trim() ? "\n\n" : ""}${block}`;
+  return variable;
+}
+
+/** Remove managed lookups and queries whose variables are no longer used by the document. */
+export function pruneUnusedCmsArtifacts(model: AstroDocumentModel): void {
+  const serializedNodes = JSON.stringify(model.nodes);
+  const lookupPattern = /\/\* @aria-cms-lookup:([^*]+) \*\*?\/[\s\S]*?\/\* @aria-cms-lookup-end:\1 \*\*?\//g;
+  model.extraFrontmatter = model.extraFrontmatter.replace(lookupPattern, (block, id: string) => {
+    const variable = lookupVariableForId(block, id.trim());
+    return variable && serializedNodes.includes(variable) ? block : "";
+  });
+  const queryIds = [...model.extraFrontmatter.matchAll(/\/\* @aria-cms-query:([^*]+) \*\//g)]
+    .map((match) => match[1]?.trim())
+    .filter((id): id is string => Boolean(id));
+  for (const id of queryIds) removeQueryBlock(model, id);
+  model.extraFrontmatter = model.extraFrontmatter.replace(/\n{3,}/g, "\n\n").trim();
+  if (!model.extraFrontmatter.includes("@aria-cms-query:") && !model.extraFrontmatter.includes("@aria-cms-lookup:")) {
+    model.extraFrontmatter = model.extraFrontmatter
+      .replace(/import\s*\{([^}]*)\}\s*from\s*["']astro:content["'];?/, (_full, raw: string) => {
+        const names = raw.split(",").map((name) => name.trim()).filter((name) => name && name !== "getCollection");
+        return names.length ? `import { ${names.join(", ")} } from "astro:content";` : "";
+      })
+      .trim();
+  }
 }
 
 function escapeRegExp(value: string): string {
@@ -492,17 +593,70 @@ function exactCollectionStatement(
     : null;
 }
 
-function expressionField(expression: string, contexts: readonly string[]): string | null {
-  const source = expression.replace(/^\{|\}$/g, "").replace(/\?/g, "");
+function expressionPathForContext(expression: string, context: string): string | null {
+  const match = new RegExp(`\\b${escapeRegExp(context)}\\?*\\.data\\b`).exec(expression);
+  if (!match) return null;
+  let tail = expression.slice(match.index + match[0].length);
+  const segments: string[] = [];
+  while (tail) {
+    const bracket = /^\?*\.\[\s*(["'])([^"']+)\1\s*\]/.exec(tail);
+    if (bracket?.[2]) {
+      segments.push(bracket[2]);
+      tail = tail.slice(bracket[0].length);
+      continue;
+    }
+    const property = /^\?*\.([a-zA-Z_$][\w$]*)/.exec(tail);
+    if (property?.[1]) {
+      segments.push(property[1]);
+      tail = tail.slice(property[0].length);
+      continue;
+    }
+    break;
+  }
+  return segments.length ? segments.join(".") : null;
+}
+
+export function cmsBindingFieldFromExpression(expression: string, contexts: readonly string[] = []): string | null {
+  const source = expression.replace(/^\{|\}$/g, "");
+  const marked = /\/\*\s*@aria-cms-field:([^*]+?)\s*\*\//.exec(source)?.[1]?.trim();
+  if (marked) return marked;
   for (const context of contexts) {
+    const field = expressionPathForContext(source, context);
+    if (field) return field;
     const escaped = escapeRegExp(context);
-    const bracket = new RegExp(`\\b${escaped}\\.data(?:\\.?\\[(["'])([^"']+)\\1\\]|\\.([a-zA-Z_$][\\w$]*))`).exec(source);
-    if (bracket) return bracket[2] ?? bracket[3] ?? null;
     if (new RegExp(`\\b${escaped}\\.(id|slug|body)\\b`).test(source)) {
       return new RegExp(`\\b${escaped}\\.(id|slug|body)\\b`).exec(source)?.[1] ?? null;
     }
   }
   return null;
+}
+
+function relationTraversalFromExpression(
+  frontmatter: string,
+  expression: string,
+  contextVariable: string,
+  field: string,
+): CmsRelationTraversal | undefined {
+  const lookupVariable = /\b([a-zA-Z_$][\w$]*)\.get\(\s*String\(/.exec(expression)?.[1];
+  if (!lookupVariable) return undefined;
+  const lookupPattern = new RegExp(
+    `/\\* @aria-cms-lookup:[^*]+ \\*/[\\s\\S]*?const\\s+${escapeRegExp(lookupVariable)}\\s*=[\\s\\S]*?getCollection\\(\\s*(["'])([^"']+)\\1\\s*\\)`,
+  );
+  const targetCollection = lookupPattern.exec(frontmatter)?.[2];
+  const sourceField = expressionPathForContext(expression, contextVariable);
+  if (!targetCollection || !sourceField) return undefined;
+  const kind = expression.includes("Array.isArray(") ? "relation" : "reference";
+  const prefix = kind === "relation" ? `${sourceField}.0.` : `${sourceField}.`;
+  const targetField = field.startsWith(prefix) ? field.slice(prefix.length) : "";
+  if (!targetField) return undefined;
+  return {
+    sourceField,
+    targetCollection,
+    targetField,
+    kind,
+    ...(kind === "relation" ? { index: 0 } : {}),
+    lookupVariable,
+  };
 }
 
 function directEntrySlug(
@@ -542,7 +696,7 @@ export function resolveDirectCmsTextBinding(
   if (node?.kind !== "expr") return null;
   const expression = node.value.replace(/^\{|\}$/g, "");
   const contextVariable = /\b([a-zA-Z_$][\w$]*)\?*\.data\b/.exec(expression)?.[1];
-  const field = contextVariable ? expressionField(expression, [contextVariable]) : null;
+  const field = contextVariable ? cmsBindingFieldFromExpression(expression, [contextVariable]) : null;
   if (!contextVariable || !field) return null;
   const owner = directEntrySlug(model.extraFrontmatter, contextVariable);
   if (!owner) return null;
@@ -552,7 +706,39 @@ export function resolveDirectCmsTextBinding(
     entrySlug: owner.entrySlug,
     contextVariable,
     field,
+    relation: relationTraversalFromExpression(model.extraFrontmatter, expression, contextVariable, field),
     contentExposure: parseCmsContentExposure(node.value),
+  };
+}
+
+/** Resolve a managed single-entry prop binding without evaluating project code. */
+export function resolveDirectCmsPropBinding(
+  model: AstroDocumentModel,
+  selectedPath: string,
+  propName: string,
+): DirectCmsPropBinding | null {
+  const selected = locateAtPath(model.nodes, selectedPath)?.node;
+  if (!selected || !(selected.kind === "element" || selected.kind === "component" || selected.kind === "slot" || selected.kind === "raw")) {
+    return null;
+  }
+  const prop = selected.props[propName];
+  if (prop?.type !== "expr") return null;
+  const expression = prop.value.replace(/^\{|\}$/g, "");
+  const contextVariable = /\b([a-zA-Z_$][\w$]*)\?*\.data\b/.exec(expression)?.[1]
+    ?? /\b([a-zA-Z_$][\w$]*)\.get\(/.exec(expression)?.[1];
+  const field = cmsBindingFieldFromExpression(expression, contextVariable ? [contextVariable] : []);
+  if (!contextVariable || !field) return null;
+  const owner = directEntrySlug(model.extraFrontmatter, contextVariable);
+  if (!owner) return null;
+  return {
+    path: selectedPath,
+    propName,
+    collection: owner.collection,
+    entrySlug: owner.entrySlug,
+    contextVariable,
+    field,
+    relation: relationTraversalFromExpression(model.extraFrontmatter, expression, contextVariable, field),
+    contentExposure: parseCmsContentExposure(prop.value),
   };
 }
 
@@ -629,7 +815,7 @@ export function describeComposerCmsSelection(
     }
   }
   const field = node?.kind === "expr"
-    ? expressionField(node.value, contexts)
+    ? cmsBindingFieldFromExpression(node.value, contexts)
     : null;
   const count = node ? bindingCount(node, contexts) : 0;
   const label = collection

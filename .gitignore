@@ -11,6 +11,7 @@ node_modules
 dist
 dist-electron
 dist-ssr
+.astro
 release
 .aria-runtime-smoke-*
 .aria-real-runtime-*

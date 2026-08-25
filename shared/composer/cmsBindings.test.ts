@@ -5,14 +5,17 @@ import {
   adoptCmsLoop,
   bindCmsPropAtPath,
   bindCmsTextAtPath,
+  compileCmsBindingExpression,
   detectCmsContext,
   describeComposerCmsSelection,
   resolveDirectCmsTextBinding,
   parseCmsContentExposure,
+  pruneUnusedCmsArtifacts,
   mapSuggestedCmsFieldsAtPath,
   setCmsContentExposureAtPath,
   unwrapCmsLoop,
   upsertCmsCollectionQuery,
+  upsertCmsRelationLookup,
   wrapNodeInCmsLoop,
   unbindCmsPropAtPath,
   unbindCmsTextAtPath,
@@ -26,6 +29,101 @@ async function model(source: string) {
 }
 
 describe("Astro-native CMS bindings", () => {
+  it("compiles one-hop reference and relation bindings through managed lookups", () => {
+    expect(compileCmsBindingExpression({
+      contextVariable: "entry",
+      field: "author.name",
+      relation: {
+        sourceField: "author",
+        targetCollection: "authors",
+        targetField: "name",
+        kind: "reference",
+        lookupVariable: "ariaCmsAuthorsById",
+      },
+    })).toContain('?.id ?? (entry?.data?.["author"])?.slug');
+    expect(compileCmsBindingExpression({
+      contextVariable: "entry",
+      field: "author.name",
+      relation: {
+        sourceField: "author",
+        targetCollection: "authors",
+        targetField: "name",
+        kind: "reference",
+        lookupVariable: "ariaCmsAuthorsById",
+      },
+    })).toContain('ariaCmsAuthorsById.get(String(');
+    expect(compileCmsBindingExpression({
+      contextVariable: "entry",
+      field: "tags.0.label",
+      relation: {
+        sourceField: "tags",
+        targetCollection: "tags",
+        targetField: "label",
+        kind: "relation",
+        index: 0,
+        lookupVariable: "ariaCmsTagsById",
+      },
+    })).toContain('Array.isArray(entry?.data?.["tags"])');
+  });
+
+  it("deduplicates and prunes related collection lookup blocks", async () => {
+    const doc = await model(`<p>Static</p>`);
+    const first = upsertCmsRelationLookup(doc, "authors");
+    expect(upsertCmsRelationLookup(doc, "authors")).toBe(first);
+    expect(doc.extraFrontmatter.match(/@aria-cms-lookup:authors/g)).toHaveLength(1);
+    doc.nodes = [(await model(`<p>{${first}.get("one")?.name}</p>`)).nodes[0]!];
+    pruneUnusedCmsArtifacts(doc);
+    expect(doc.extraFrontmatter).toContain("@aria-cms-lookup:authors");
+    doc.nodes = [(await model(`<p>Static</p>`)).nodes[0]!];
+    pruneUnusedCmsArtifacts(doc);
+    expect(doc.extraFrontmatter).not.toContain("@aria-cms-lookup:authors");
+  });
+
+  it("round-trips a related binding and cleans up its lookup after unbinding", async () => {
+    const doc = await model(`<h2>Exact fallback</h2>`);
+    const query = upsertCmsCollectionQuery(doc, {
+      id: "featured-post",
+      collection: "posts",
+      entrySlug: "featured",
+      variable: "featuredPost",
+    });
+    const lookupVariable = upsertCmsRelationLookup(doc, "authors");
+    expect(bindCmsTextAtPath(doc, "0.0", {
+      contextVariable: query.variable,
+      field: "author.name",
+      relation: {
+        sourceField: "author",
+        targetCollection: "authors",
+        targetField: "name",
+        kind: "reference",
+        lookupVariable,
+      },
+    }).ok).toBe(true);
+
+    const source = serializeAstro(doc);
+    expect(source).toContain("@aria-cms-field:author.name");
+    expect(source).toContain("entry.data.ariaEntryId");
+    const reparsed = await model(source);
+    expect(resolveDirectCmsTextBinding(reparsed, "0")).toMatchObject({
+      collection: "posts",
+      entrySlug: "featured",
+      field: "author.name",
+      relation: {
+        sourceField: "author",
+        targetCollection: "authors",
+        targetField: "name",
+        kind: "reference",
+      },
+    });
+    expect(unbindCmsTextAtPath(reparsed, "0.0").ok).toBe(true);
+    pruneUnusedCmsArtifacts(reparsed);
+    const restored = serializeAstro(reparsed);
+    expect(restored).toContain("Exact fallback");
+    expect(restored).not.toContain("@aria-cms-query");
+    expect(restored).not.toContain("@aria-cms-lookup");
+    expect(restored).not.toContain("astro:content");
+  });
+
   it("binds props and text while preserving static fallbacks", async () => {
     const doc = await model("---\nconst { post } = Astro.props;\n---\n<h1 title=\"Original\">Original title</h1>");
     expect(bindCmsPropAtPath(doc, "0", "title", { contextVariable: "post", field: "title" }).ok).toBe(true);

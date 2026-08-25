@@ -971,6 +971,7 @@ provideComposerDocument({
   pages: computed(() => props.pages),
   documentKind: computed(() => editStack.current.value?.kind ?? "page"),
   instanceChain: computed(() => editStack.current.value?.instanceChain ?? []),
+  cmsEntryTemplatePreview,
   mutateModel,
   commitModelMutation,
   withMutationLock,

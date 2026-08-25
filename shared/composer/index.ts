@@ -51,6 +51,7 @@ export {
 
 export * from "./motion";
 export * from "./cmsBindings";
+export * from "./cmsFieldOptions";
 export * from "./contentBindingSource";
 export * from "./collectionBindings";
 export * from "./projectData";

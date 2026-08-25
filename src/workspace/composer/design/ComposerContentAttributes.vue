@@ -10,9 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { MediaAsset, MediaAssetType } from "@/lib/media"
 import { getCmsEntry, updateCmsEntry } from "@/lib/cms"
 import { getCollections } from "@/lib/workspace"
+import { confirm } from "@/composables/useConfirm"
 import { m } from "@/paraglide/messages.js"
 import MediaPickerDialog from "@/workspace/studio/media/components/MediaPickerDialog.vue"
-import { containsDynamicAstroContent, applyComposerIconElement, isComposerAlertNode, isComposerBadgeNode, isComposerButtonNode, nodeAtMarkerPath, resolveComposerAvatarParts, resolveDirectCmsTextBinding, resolveElementInspectorTarget, stringFieldDisplay } from "../../../../shared/composer"
+import { containsDynamicAstroContent, applyComposerIconElement, cmsFieldPathLabel, isComposerAlertNode, isComposerBadgeNode, isComposerButtonNode, isWritableCmsTextOwner, nodeAtMarkerPath, replaceConnectedTextWithStatic, resolveComposerAvatarParts, resolveDirectCmsTextBinding, resolveElementInspectorTarget, stringFieldDisplay } from "../../../../shared/composer"
 import type { AriaEntryRecord } from "../../../../shared/cms"
 import type { EditableNode, PropValue } from "../../../../shared/composer/types"
 import { isComposerRichTextHost } from "../../../../shared/composer/richText"
@@ -94,6 +95,9 @@ const directCmsText = computed(() => {
 const cmsTextRecord = ref<AriaEntryRecord | null>(null)
 const cmsTextLocale = ref("")
 const cmsTextCollectionId = ref("")
+const cmsTextCollectionLabel = ref("")
+const cmsTextEntryLabel = ref("")
+const cmsTextEditField = ref("")
 const cmsTextDraft = ref("")
 const cmsTextLoading = ref(false)
 const cmsTextSaving = ref(false)
@@ -102,12 +106,27 @@ const cmsTextNotice = ref("")
 let cmsTextGeneration = 0
 
 const cmsTextFieldLabel = computed(() => directCmsText.value?.field
-  .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-  .replace(/[-_]+/g, " ")
-  .replace(/^./, (letter) => letter.toUpperCase()) ?? "Content")
+  ? cmsFieldPathLabel(directCmsText.value.field)
+  : "Content")
 const cmsTextMultiline = computed(() => {
   const tag = element.value?.name.toLowerCase()
   return cmsTextDraft.value.length > 80 || ["p", "blockquote", "figcaption", "dd"].includes(tag ?? "")
+})
+const cmsTextCanWriteOwner = computed(() => {
+  const binding = directCmsText.value
+  const model = inspector?.document.model.value
+  const context = inspector?.document.cmsEntryTemplatePreview?.value
+  const selectedEntry = context?.entries.find((entry) => entry.id === context.selectedEntryId)
+  if (!binding || binding.relation || !model || !selectedEntry) return false
+  return (
+    (selectedEntry.slug === binding.entrySlug || selectedEntry.id === binding.entrySlug) &&
+    isWritableCmsTextOwner(model, {
+      collection: binding.collection,
+      contextVariable: binding.contextVariable,
+      field: binding.field,
+      contentExposure: binding.contentExposure,
+    }, context)
+  )
 })
 
 function cmsLocale(record: AriaEntryRecord) {
@@ -120,7 +139,60 @@ function cmsTextValue(record: AriaEntryRecord, field: string): unknown {
   if (field === "title") return locale.title
   if (field === "slug") return locale.slug
   if (field === "body") return locale.body
-  return locale.frontmatter[field]
+  return valueAtPath(locale.frontmatter, field)
+}
+
+function valueAtPath(value: unknown, path: string): unknown {
+  return path.split(".").filter(Boolean).reduce<unknown>((current, segment) => {
+    if (Array.isArray(current) && /^\d+$/.test(segment)) return current[Number(segment)]
+    return current && typeof current === "object" ? (current as Record<string, unknown>)[segment] : undefined
+  }, value)
+}
+
+function setValueAtPath(source: Record<string, unknown>, path: string, value: string): Record<string, unknown> {
+  const segments = path.split(".").filter(Boolean)
+  if (!segments.length) return source
+  const root = { ...source }
+  let current: Record<string, unknown> | unknown[] = root
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index]!
+    const key = Array.isArray(current) && /^\d+$/.test(segment) ? Number(segment) : segment
+    const existing: unknown = Array.isArray(current)
+      ? current[Number(key)]
+      : current[String(key)]
+    const next: Record<string, unknown> | unknown[] = Array.isArray(existing)
+      ? [...existing]
+      : existing && typeof existing === "object"
+        ? { ...(existing as Record<string, unknown>) }
+        : /^\d+$/.test(segments[index + 1] ?? "") ? [] : {}
+    ;(current as Record<string | number, unknown>)[key] = next
+    current = next
+  }
+  const last = segments.at(-1)!
+  const key = Array.isArray(current) && /^\d+$/.test(last) ? Number(last) : last
+  ;(current as Record<string | number, unknown>)[key] = value
+  return root
+}
+
+function relationIdentity(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>
+    return String(record.id ?? record.slug ?? record.ariaEntryId ?? "")
+  }
+  return value == null ? "" : String(value)
+}
+
+function cmsRecordValues(record: AriaEntryRecord, relationField?: string): Record<string, unknown> {
+  const locale = cmsLocale(record)
+  const values = { ...(locale?.frontmatter ?? {}) }
+  if (relationField && !relationField.includes(".")) {
+    const ids = (record.relations ?? [])
+      .filter((relation) => relation.fieldKey === relationField)
+      .sort((a, b) => a.position - b.position)
+      .map((relation) => relation.targetEntryId)
+    if (ids.length) values[relationField] = ids
+  }
+  return values
 }
 
 async function loadCmsText() {
@@ -130,6 +202,9 @@ async function loadCmsText() {
   cmsTextRecord.value = null
   cmsTextLocale.value = ""
   cmsTextCollectionId.value = ""
+  cmsTextCollectionLabel.value = ""
+  cmsTextEntryLabel.value = ""
+  cmsTextEditField.value = ""
   cmsTextDraft.value = ""
   cmsTextError.value = ""
   cmsTextNotice.value = ""
@@ -143,16 +218,40 @@ async function loadCmsText() {
     if (!collection || collection.source && collection.source.kind !== "aria-managed") {
       throw new Error("This value is not owned by Aria CMS.")
     }
-    const record = await getCmsEntry(projectPath, collection.id, binding.entrySlug)
+    const ownerRecord = await getCmsEntry(projectPath, collection.id, binding.entrySlug)
+    if (generation !== cmsTextGeneration) return
+    let record = ownerRecord
+    let editableCollection = collection
+    let editableField = binding.field
+    if (record && binding.relation) {
+      const targetCollection = registry.collections.find(
+        (item) => item.id === binding.relation?.targetCollection || item.name === binding.relation?.targetCollection,
+      )
+      if (!targetCollection || targetCollection.source && targetCollection.source.kind !== "aria-managed") {
+        throw new Error("The related value is not owned by Aria CMS.")
+      }
+      const source = valueAtPath(cmsRecordValues(record, binding.relation.sourceField), binding.relation.sourceField)
+      const related = binding.relation.kind === "relation" && Array.isArray(source)
+        ? source[Math.max(0, binding.relation.index ?? 0)]
+        : source
+      const relatedId = relationIdentity(related)
+      if (!relatedId) throw new Error("The related CMS entry is unavailable.")
+      record = await getCmsEntry(projectPath, targetCollection.id, relatedId)
+      editableCollection = targetCollection
+      editableField = binding.relation.targetField
+    }
     if (generation !== cmsTextGeneration) return
     const locale = record && cmsLocale(record)
-    const value = record ? cmsTextValue(record, binding.field) : undefined
+    const value = record ? cmsTextValue(record, editableField) : undefined
     if (!record || !locale || typeof value !== "string") {
       throw new Error("The CMS text value could not be loaded.")
     }
     cmsTextRecord.value = record
     cmsTextLocale.value = locale.locale
-    cmsTextCollectionId.value = collection.id
+    cmsTextCollectionId.value = editableCollection.id
+    cmsTextCollectionLabel.value = editableCollection.label ?? editableCollection.name
+    cmsTextEntryLabel.value = locale.title || record.entry.id
+    cmsTextEditField.value = editableField
     cmsTextDraft.value = value
   } catch (cause) {
     if (generation === cmsTextGeneration) {
@@ -169,6 +268,8 @@ watch(
     directCmsText.value?.collection ?? "",
     directCmsText.value?.entrySlug ?? "",
     directCmsText.value?.field ?? "",
+    directCmsText.value?.relation?.targetCollection ?? "",
+    directCmsText.value?.relation?.targetField ?? "",
   ] as const,
   () => void loadCmsText(),
   { immediate: true },
@@ -181,13 +282,51 @@ async function saveCmsText() {
   const projectPath = inspector?.projectPath.value
   if (
     !binding || !record || !locale || !projectPath || !cmsTextCollectionId.value ||
-    binding.contentExposure !== "editable" || cmsTextSaving.value
+    cmsTextSaving.value
   ) return
-  const previous = cmsTextValue(record, binding.field)
+  const field = cmsTextEditField.value || binding.field
+  const previous = cmsTextValue(record, field)
   if (cmsTextDraft.value === previous) return
+  const selectedPath = inspector?.selectedPath.value
+  const generation = cmsTextGeneration
   cmsTextSaving.value = true
   cmsTextError.value = ""
   cmsTextNotice.value = ""
+  if (!cmsTextCanWriteOwner.value) {
+    const accepted = await confirm({
+      title: "Replace connected text?",
+      description: `This text comes from CMS field “${field}”. Replacing it in the Inspector removes that live connection and creates static text.`,
+      confirmLabel: "Replace with static text",
+      cancelLabel: "Keep connection",
+      destructive: true,
+    })
+    if (
+      generation !== cmsTextGeneration ||
+      inspector?.selectedPath.value !== selectedPath ||
+      directCmsText.value?.path !== binding.path
+    ) {
+      cmsTextSaving.value = false
+      return
+    }
+    if (!accepted) {
+      cmsTextDraft.value = String(previous ?? "")
+      cmsTextNotice.value = "The live connection was kept."
+      cmsTextSaving.value = false
+      return
+    }
+    const replacement = cmsTextDraft.value
+    const changed = Boolean(selectedPath) && inspector.document.commitInspectorMutation(
+      "Replace connected text",
+      (model) => replaceConnectedTextWithStatic(model, binding.path, replacement, selectedPath ?? binding.path),
+      { immediate: true, coalesceKey: null },
+    )
+    if (!changed) {
+      cmsTextDraft.value = String(previous ?? "")
+      cmsTextError.value = "The connected text could not be replaced."
+    }
+    cmsTextSaving.value = false
+    return
+  }
   try {
     const next = await updateCmsEntry(projectPath, {
       collectionId: cmsTextCollectionId.value,
@@ -196,12 +335,12 @@ async function saveCmsText() {
       patch: {
         upsertLocale: {
           locale: locale.locale,
-          title: binding.field === "title" ? cmsTextDraft.value : locale.title,
-          slug: binding.field === "slug" ? cmsTextDraft.value : locale.slug,
-          frontmatter: binding.field === "title" || binding.field === "slug" || binding.field === "body"
+          title: field === "title" ? cmsTextDraft.value : locale.title,
+          slug: field === "slug" ? cmsTextDraft.value : locale.slug,
+          frontmatter: field === "title" || field === "slug" || field === "body"
             ? locale.frontmatter
-            : { ...locale.frontmatter, [binding.field]: cmsTextDraft.value },
-          body: binding.field === "body" ? cmsTextDraft.value : locale.body,
+            : setValueAtPath(locale.frontmatter, field, cmsTextDraft.value),
+          body: field === "body" ? cmsTextDraft.value : locale.body,
           isSource: locale.isSource,
           status: locale.status,
           publishedAt: locale.publishedAt,
@@ -490,7 +629,7 @@ function setStyle(
             id="composer-cms-content"
             v-model="cmsTextDraft"
             class="min-h-20 text-xs"
-            :disabled="disabled || cmsTextSaving || directCmsText.contentExposure !== 'editable'"
+            :disabled="disabled || cmsTextSaving"
             @change="saveCmsText"
           />
           <Input
@@ -498,11 +637,11 @@ function setStyle(
             id="composer-cms-content"
             v-model="cmsTextDraft"
             class="h-8 text-xs"
-            :disabled="disabled || cmsTextSaving || directCmsText.contentExposure !== 'editable'"
+            :disabled="disabled || cmsTextSaving"
             @change="saveCmsText"
           />
           <p class="text-[10px] text-muted-foreground">
-            {{ directCmsText.collection }} · {{ directCmsText.entrySlug }} · {{ cmsTextLocale }}
+            {{ cmsTextCollectionLabel || directCmsText.collection }} · {{ cmsTextEntryLabel || directCmsText.entrySlug }} · {{ cmsTextLocale }}
           </p>
         </template>
         <p v-if="cmsTextError" role="alert" class="text-[11px] text-destructive">{{ cmsTextError }}</p>

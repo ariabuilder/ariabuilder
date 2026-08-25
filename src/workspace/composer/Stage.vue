@@ -44,6 +44,7 @@ import {
 import {
   resolveCanvasTextTarget,
   canvasTextMirrorPaths,
+  isWritableCmsTextOwner,
   type CanvasTextTarget,
 } from "../../../shared/composer/canvasText"
 import type { AriaEntryRecord } from "../../../shared/cms"
@@ -740,17 +741,8 @@ async function onInlineTextRequest(message: AriaInlineTextRequestMessage) {
       const selectedEntry = context?.entries.find(
         (entry) => entry.id === context.selectedEntryId,
       )
-      const ownerBinding = model.collectionBindings?.[target.contextVariable]
-      const exactOwner = Boolean(
-        target.collection && target.collection === context?.collectionName &&
-        ownerBinding?.cardinality === "one" &&
-        ownerBinding.collections.length === 1 &&
-        ownerBinding.collections[0] === context?.collectionName,
-      )
       if (
-        exactOwner && target.contentExposure === "editable" &&
-        context?.sourceKind === "aria-managed" && context.writable && selectedEntry &&
-        context.writableTextFields?.includes(target.field)
+        context && isWritableCmsTextOwner(model, target, context) && selectedEntry
       ) {
         const record = await getCmsEntry(
           props.projectPath,

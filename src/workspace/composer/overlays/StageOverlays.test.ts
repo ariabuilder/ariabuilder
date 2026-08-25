@@ -178,7 +178,7 @@ describe("StageOverlays CMS selection controls", () => {
     expect(host.querySelector('button[aria-label="Repeat from collection"]')).not.toBeNull()
   })
 
-  it("shows image source and alt binding controls without a repeat action", async () => {
+  it("groups image source and alt mapping into one binding control", async () => {
     const host = mountToolbar({
       imports: [],
       extraFrontmatter: "",
@@ -188,8 +188,30 @@ describe("StageOverlays CMS selection controls", () => {
       extendsTag: null,
     }, "Image")
     await nextTick()
-    expect(host.querySelector('button[aria-label="Bind image source"]')).not.toBeNull()
-    expect(host.querySelector('button[aria-label="Bind alternative text"]')).not.toBeNull()
+    expect(host.querySelector('button[aria-label="Bind image fields"]')).not.toBeNull()
+    expect(host.querySelector('button[aria-label="Bind image source"]')).toBeNull()
+    expect(host.querySelector('button[aria-label="Bind alternative text"]')).toBeNull()
     expect(host.querySelector('button[aria-label="Repeat from collection"]')).toBeNull()
+  })
+
+  it("groups link destination and editable label into one binding control", async () => {
+    const host = mountToolbar({
+      imports: [],
+      extraFrontmatter: "",
+      nodes: [{
+        id: "link",
+        kind: "element",
+        name: "a",
+        props: { href: { type: "string", value: "/docs" } },
+        children: [{ id: "label", kind: "text", value: "Documentation" }],
+      }],
+      propSchema: [],
+      slots: [],
+      extendsTag: null,
+    }, "Link")
+    await nextTick()
+    expect(host.querySelector('button[aria-label="Bind link fields"]')).not.toBeNull()
+    expect(host.querySelector('button[aria-label="Bind link destination"]')).toBeNull()
+    expect(host.querySelector('button[aria-label="Bind link label"]')).toBeNull()
   })
 })

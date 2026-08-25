@@ -16,6 +16,7 @@ import type {
   ComposerInsertComponent,
 } from "./useComposerDocument"
 import type { ProjectDataInstanceSegment } from "../../../shared/composer/projectData"
+import type { ComposerCmsEntryTemplatePreviewContext } from "../../../shared/composer/componentAuthoring"
 
 export type ComposerDocumentSession = {
   model: Ref<AstroDocumentModel | null>
@@ -31,6 +32,7 @@ export type ComposerDocumentSession = {
   pages: Ref<readonly ScanPage[]>
   documentKind: ComputedRef<"page" | "component" | "layout">
   instanceChain: ComputedRef<readonly ProjectDataInstanceSegment[]>
+  cmsEntryTemplatePreview?: Ref<ComposerCmsEntryTemplatePreviewContext | null>
   mutateModel: ComposerDocumentApi["mutateModel"]
   commitModelMutation: ComposerDocumentApi["commitModelMutation"]
   withMutationLock: ComposerDocumentApi["withMutationLock"]

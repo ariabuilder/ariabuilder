@@ -1,4 +1,6 @@
 import { describeComposerCmsSelection, parseCmsContentExposure } from "./cmsBindings";
+import type { ComposerCmsEntryTemplatePreviewContext } from "./componentAuthoring";
+import { locateAtPath } from "./mutate";
 import { nodeAtMarkerPath } from "./paths";
 import type { AstroDocumentModel, EditableNode } from "./types";
 
@@ -49,6 +51,50 @@ export type CanvasTextSessionState = {
         locale: string;
       };
 };
+
+type CmsTextOwnerCandidate = Pick<
+  Extract<CanvasTextTarget, { kind: "cms" }>,
+  "collection" | "contextVariable" | "field" | "contentExposure"
+>;
+
+/** Keep canvas and Inspector CMS writes behind the same exact-owner gate. */
+export function isWritableCmsTextOwner(
+  model: AstroDocumentModel,
+  target: CmsTextOwnerCandidate,
+  context: ComposerCmsEntryTemplatePreviewContext | null | undefined,
+): boolean {
+  const ownerBinding = model.collectionBindings?.[target.contextVariable];
+  return Boolean(
+    target.collection && target.collection === context?.collectionName &&
+    ownerBinding?.cardinality === "one" &&
+    ownerBinding.collections.length === 1 &&
+    ownerBinding.collections[0] === context?.collectionName &&
+    target.contentExposure === "editable" &&
+    context?.sourceKind === "aria-managed" && context.writable &&
+    context.selectedEntryId &&
+    context.writableTextFields?.includes(target.field),
+  );
+}
+
+/** Replace one connected expression with literal Astro text after confirmation. */
+export function replaceConnectedTextWithStatic(
+  model: AstroDocumentModel,
+  path: string,
+  value: string,
+  selectPath = path,
+) {
+  const location = locateAtPath(model.nodes, path);
+  if (!location || location.node.kind !== "expr") {
+    return { ok: false as const, selectPath, reason: "The connected text is no longer available." };
+  }
+  location.list[location.index] = {
+    id: location.node.id,
+    kind: "text",
+    value,
+    ...(location.node.sourceRange ? { sourceRange: location.node.sourceRange } : {}),
+  };
+  return { ok: true as const, selectPath };
+}
 
 function singleTextChild(node: EditableNode | null, path: string) {
   if (!node) return null;
