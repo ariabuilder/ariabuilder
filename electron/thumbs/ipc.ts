@@ -179,7 +179,12 @@ export function registerThumbsIpc(
         opts: {
           projectPath?: string;
           baseUrl?: string;
-          pages?: Array<{ route?: string; mtimeMs?: number | null }>;
+          pages?: Array<{
+            route?: string;
+            previewRoute?: string | null;
+            cacheKey?: string | null;
+            mtimeMs?: number | null;
+          }>;
         },
       ) => {
         if (!opts || typeof opts.projectPath !== "string" || !opts.projectPath.trim()) {
@@ -203,6 +208,9 @@ export function registerThumbsIpc(
           .filter((p) => p && typeof p.route === "string")
           .map((p) => ({
             route: p.route as string,
+            previewRoute:
+              typeof p.previewRoute === "string" ? p.previewRoute : undefined,
+            cacheKey: typeof p.cacheKey === "string" ? p.cacheKey : undefined,
             mtimeMs: p.mtimeMs,
           }));
         // Fire-and-forget from the caller's perspective would block IPC for
@@ -291,7 +299,12 @@ export function registerThumbsIpc(
         opts: {
           projectPath?: string;
           baseUrl?: string;
-          pages?: Array<{ route?: string; mtimeMs?: number | null }>;
+          pages?: Array<{
+            route?: string;
+            previewRoute?: string | null;
+            cacheKey?: string | null;
+            mtimeMs?: number | null;
+          }>;
           layouts?: Array<{ id?: string; mtimeMs?: number | null }>;
         },
       ) => {
@@ -314,7 +327,16 @@ export function registerThumbsIpc(
         }
         const pages = opts.pages
           .filter((page) => page && typeof page.route === "string")
-          .map((page) => ({ route: page.route as string, mtimeMs: page.mtimeMs }));
+          .map((page) => ({
+            route: page.route as string,
+            previewRoute:
+              typeof page.previewRoute === "string"
+                ? page.previewRoute
+                : undefined,
+            cacheKey:
+              typeof page.cacheKey === "string" ? page.cacheKey : undefined,
+            mtimeMs: page.mtimeMs,
+          }));
         const layouts = opts.layouts
           .filter((layout) => layout && typeof layout.id === "string" && layout.id.trim())
           .map((layout) => ({ id: layout.id as string, mtimeMs: layout.mtimeMs }));

@@ -727,7 +727,12 @@ export type AriaThumbsApi = {
   warmPages: (opts: {
     projectPath: string;
     baseUrl: string;
-    pages: Array<{ route: string; mtimeMs?: number | null }>;
+    pages: Array<{
+      route: string;
+      previewRoute?: string | null;
+      cacheKey?: string | null;
+      mtimeMs?: number | null;
+    }>;
   }) => Promise<WarmPagesResult>;
   warmComponents: (opts: {
     projectPath: string;
@@ -741,7 +746,12 @@ export type AriaThumbsApi = {
   warmLayouts: (opts: {
     projectPath: string;
     baseUrl: string;
-    pages: Array<{ route: string; mtimeMs?: number | null }>;
+    pages: Array<{
+      route: string;
+      previewRoute?: string | null;
+      cacheKey?: string | null;
+      mtimeMs?: number | null;
+    }>;
     layouts: Array<{ id: string; mtimeMs?: number | null }>;
   }) => Promise<WarmPagesResult>;
   cancelWarm: () => Promise<{ ok: true }>;

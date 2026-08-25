@@ -62,6 +62,7 @@ let overflowCloseTimer: ReturnType<typeof setTimeout> | null = null
 const updatedLabel = computed(() => formatPageUpdated(props.page.mtimeMs))
 const isNavigable = computed(() => isNavigableScanPage(props.page))
 const canEditInComposer = computed(() => isNavigable.value || props.page.role === "cms-entry")
+const canLoadThumb = computed(() => isNavigable.value || props.page.role === "cms-entry")
 
 const previewHref = computed(() => {
   if (!isNavigable.value) return null
@@ -163,7 +164,7 @@ function samePath(a: string, b: string) {
 }
 
 async function loadThumb() {
-  if (!isNavigable.value) {
+  if (!canLoadThumb.value) {
     thumbUrl.value = null
     thumbLoading.value = false
     return

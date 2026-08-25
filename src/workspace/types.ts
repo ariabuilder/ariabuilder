@@ -33,6 +33,15 @@ export type WorkspaceActiveDocument =
   | { kind: "component"; name: string; file: string }
   | { kind: "layout"; name: string; file: string }
 
+/** Plain header-safe projection of an exact component/layout instance on canvas. */
+export type WorkspaceComposerCanvasTarget = {
+  id: string
+  kind: "component" | "layout"
+  label: string
+  detail: string
+  current?: boolean
+}
+
 export type ProjectSession = {
   root: string
   name: string
