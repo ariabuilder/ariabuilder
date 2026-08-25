@@ -11,6 +11,7 @@ const electronMock = vi.hoisted(() => ({
     webContents: {
       capturePage: ReturnType<typeof vi.fn>;
       executeJavaScript: ReturnType<typeof vi.fn>;
+      emit: (event: string, ...args: unknown[]) => boolean;
     };
   }>,
   autoFinishLoad: true,
@@ -210,6 +211,34 @@ describe("clean page thumbnail capture", () => {
     expect(
       electronMock.instances[1]!.webContents.capturePage,
     ).toHaveBeenCalledOnce();
+  });
+
+  it("ignores subframe failures and aborted navigations", async () => {
+    const userData = tempUserData();
+    electronMock.autoFinishLoad = false;
+    const capture = captureThumbs(userData, request());
+    await Promise.resolve();
+
+    const win = electronMock.instances[0]!;
+    win.webContents.emit(
+      "did-fail-load",
+      {},
+      -105,
+      "NAME_NOT_RESOLVED",
+      "http://invalid.test/frame",
+      false,
+    );
+    win.webContents.emit(
+      "did-fail-load",
+      {},
+      -3,
+      "ERR_ABORTED",
+      win.loadedUrl,
+      true,
+    );
+    win.webContents.emit("did-finish-load");
+
+    await expect(capture).resolves.toEqual({ ok: true });
   });
 
   it("keeps the last good thumbnail when a later capture is blank", async () => {

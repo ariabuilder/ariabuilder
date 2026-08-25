@@ -632,9 +632,13 @@ function loadUrlForCapture(
     };
     const onFail = (
       _event: unknown,
-      _errorCode: number,
+      errorCode: number,
       errorDescription: string,
+      _validatedUrl: string,
+      isMainFrame: boolean,
     ) => {
+      // Ignore failed subresources and redirects superseded by the final load.
+      if (!isMainFrame || errorCode === -3) return;
       cleanup();
       reject(new Error(errorDescription || "Failed to load page"));
     };
