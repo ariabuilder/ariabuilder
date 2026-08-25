@@ -117,12 +117,9 @@ describe("ProjectWatcher", () => {
     const src = path.join(root, "src");
     const nested = path.join(src, "nested");
     fs.mkdirSync(nested, { recursive: true });
-    const canonicalSrc = fs.realpathSync(src);
-
-    const callbacks = new Map<
-      string,
-      (eventType: fs.WatchEventType, filename: string | Buffer | null) => void
-    >();
+    let srcListener:
+      | ((eventType: fs.WatchEventType, filename: string | Buffer | null) => void)
+      | undefined;
     const makeWatcher = (
       directory: string,
       listener: (eventType: fs.WatchEventType, filename: string | Buffer | null) => void,
@@ -131,7 +128,7 @@ describe("ProjectWatcher", () => {
       nativeWatcher.close = () => undefined;
       nativeWatcher.ref = () => nativeWatcher;
       nativeWatcher.unref = () => nativeWatcher;
-      callbacks.set(path.resolve(directory), listener);
+      if (path.basename(directory).toLowerCase() === "src") srcListener = listener;
       return nativeWatcher;
     };
     const watcher = new ProjectWatcher(
@@ -147,11 +144,12 @@ describe("ProjectWatcher", () => {
     expect(watcher.activeWatcherCount()).toBe(3);
 
     fs.rmSync(nested, { recursive: true });
-    callbacks.get(canonicalSrc)?.("rename", "nested");
+    expect(srcListener).toBeTypeOf("function");
+    srcListener?.("rename", "nested");
     expect(watcher.activeWatcherCount()).toBe(2);
 
     fs.mkdirSync(path.join(nested, "deeper"), { recursive: true });
-    callbacks.get(canonicalSrc)?.("rename", "nested");
+    srcListener?.("rename", "nested");
     expect(watcher.activeWatcherCount()).toBe(4);
     watcher.stop();
   });

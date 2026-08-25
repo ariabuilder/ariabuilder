@@ -41,7 +41,9 @@ describe("Git porcelain status", () => {
     fs.renameSync(path.join(root, original), path.join(root, renamed));
     execFileSync("git", ["add", "-A"], { cwd: root });
 
-    const unusual = ["space name.txt", "quote\"name.txt", "文件.txt"];
+    const unusual = process.platform === "win32"
+      ? ["space name.txt", "apostrophe'name.txt", "文件.txt"]
+      : ["space name.txt", "quote\"name.txt", "文件.txt"];
     for (const name of unusual) fs.writeFileSync(path.join(root, name), name);
 
     const status = await getGitStatus(root);
