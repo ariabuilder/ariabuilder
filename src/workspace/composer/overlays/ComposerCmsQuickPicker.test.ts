@@ -57,7 +57,7 @@ function sourceModel(): AstroDocumentModel {
   }
 }
 
-function mountPicker(initialModel = sourceModel(), control: "text" | "loop" = "text") {
+function mountPicker(initialModel = sourceModel(), control: "text" | "loop" = "text", active = false) {
   const host = document.createElement("div")
   document.body.append(host)
   const model = ref<AstroDocumentModel | null>(initialModel)
@@ -92,6 +92,7 @@ function mountPicker(initialModel = sourceModel(), control: "text" | "loop" = "t
           control,
           icon: control === "loop" ? "collections" : "databaseLine",
           label: control === "loop" ? "Repeat from collection" : "Bind text field",
+          active,
         }),
       })
     },
@@ -137,6 +138,25 @@ afterEach(() => {
 })
 
 describe("ComposerCmsQuickPicker", () => {
+  it("opens on the first pointer click and uses the standard toolbar icon treatment", async () => {
+    mocks.getCollections.mockResolvedValue({ collections: [] })
+    mountPicker(sourceModel(), "text", true)
+    const trigger = button("Bind text field")
+
+    expect(trigger.className).toContain("h-6!")
+    expect(trigger.className).toContain("w-6!")
+    expect(trigger.className).not.toContain("border-primary/45")
+    expect(trigger.className).not.toContain("bg-primary/10")
+    expect(trigger.className).not.toContain("text-primary")
+    expect(trigger.hasAttribute("data-binding-active")).toBe(true)
+
+    trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }))
+    click(trigger)
+
+    await vi.waitFor(() => expect(document.body.querySelector('section[aria-label="Choose a collection"]')).not.toBeNull())
+    expect(trigger.getAttribute("aria-expanded")).toBe("true")
+  })
+
   it("stages collection, entry, and mapping while Cancel leaves the document unchanged", async () => {
     mocks.getCollections.mockResolvedValue({
       collections: [{

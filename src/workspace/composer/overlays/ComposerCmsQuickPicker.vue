@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Spinner } from "@/components/ui/spinner"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { getCollections, getExternalEntry, listExternalEntries } from "@/lib/workspace"
 import { getCmsEntry, listCmsEntries } from "@/lib/cms"
 import type { AriaCollectionDef } from "../../../../shared/types"
@@ -469,25 +468,19 @@ watch(open, async (next) => {
 
 <template>
   <Popover v-model:open="open">
-    <Tooltip>
-      <TooltipTrigger as-child>
-        <PopoverTrigger as-child>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            class="h-6! w-6! shrink-0 cursor-pointer transition-colors active:scale-[0.96] motion-reduce:transform-none"
-            :class="active || open ? 'border border-primary/45 bg-primary/10 text-primary' : ''"
-            :aria-label="label"
-            :aria-pressed="active || open"
-            @click.stop
-          >
-            <AppIcon :name="icon" :size="14" aria-hidden="true" />
-          </Button>
-        </PopoverTrigger>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{{ label }}</TooltipContent>
-    </Tooltip>
+    <PopoverTrigger as-child>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        class="h-6! w-6! shrink-0"
+        :aria-label="label"
+        :title="label"
+        :data-binding-active="active || undefined"
+      >
+        <AppIcon :name="icon" :size="14" aria-hidden="true" />
+      </Button>
+    </PopoverTrigger>
 
     <PopoverContent
       side="bottom"
