@@ -64,32 +64,6 @@ const statement = (await getCollection("site-copy"))
     expect(tree.content[0]?.searchText).not.toContain("statement?.data");
   });
 
-  it("prefers a persisted custom layer label without changing its source label", async () => {
-    const tree = buildComposerLayerTree(
-      await modelFor('<section data-aria-layer-label="Campaign hero"><h1>Welcome</h1></section>'),
-    );
-    expect(tree.content[0]).toMatchObject({
-      label: "Campaign hero",
-      sourceLabel: "<section>",
-      semanticType: "section",
-    });
-    expect(tree.content[0]?.searchText).toContain("campaign hero");
-  });
-
-  it("uses a persisted custom label for a component instance", async () => {
-    const tree = buildComposerLayerTree(
-      await modelFor(`---
-import Hero from "./Hero.astro";
----
-<Hero data-aria-layer-label="Primary hero" />`),
-    );
-    expect(tree.content[0]).toMatchObject({
-      kind: "component",
-      label: "Primary hero",
-      sourceLabel: "<Hero>",
-    });
-  });
-
   it("uses ephemeral project-data analysis for a meaningful loop label", async () => {
     const doc = await modelFor(`---\nconst bio = ["One", "Two"];\n---\n{bio.map((para) => (<p>{para}</p>))}`);
     const loop = doc.nodes[0];

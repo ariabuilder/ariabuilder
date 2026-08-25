@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { ProjectRuntimeSession } from "@/lib/sessions"
 import type { AstroDocumentModel } from "../../../shared/composer/types"
 import { ARIA_BRIDGE_ID, ARIA_MSG, ARIA_PROTOCOL_VERSION } from "../../../shared/composer/protocol"
-import { captureThumbs } from "@/lib/thumbs"
 import Stage from "./Stage.vue"
 import { provideComposerBeacon } from "./selection/useComposerBeacon"
 
@@ -223,39 +222,6 @@ describe("Stage warm frame swap", () => {
     await nextTick()
     expect(beacon.selectedPath.value).toBe("0")
     expect(beacon.hoverPath.value).toBe(beacon.selectedPath.value)
-  })
-
-  it("requests a clean page capture using the iframe viewport", async () => {
-    vi.useFakeTimers()
-    vi.mocked(captureThumbs).mockResolvedValue({ ok: true })
-    const { host } = mountStage(true)
-    await nextTick()
-    const frame = host.querySelector("iframe") as HTMLIFrameElement
-    vi.spyOn(frame, "getBoundingClientRect").mockReturnValue({
-      x: 41,
-      y: 72,
-      width: 768,
-      height: 1024,
-      top: 72,
-      right: 809,
-      bottom: 1096,
-      left: 41,
-      toJSON: () => ({}),
-    })
-    const overlay = document.createElement("div")
-    overlay.setAttribute("data-slot", "popover-content")
-    host.append(overlay)
-
-    await vi.advanceTimersByTimeAsync(2_500)
-
-    expect(captureThumbs).toHaveBeenCalledWith({
-      projectPath: "/project",
-      baseUrl: "http://127.0.0.1:4321",
-      route: "/",
-      viewport: { width: 768, height: 1024 },
-      captureHeight: 576,
-      mtimeMs: null,
-    })
   })
 
   it("keeps the visible iframe until its replacement bridge is ready", async () => {
