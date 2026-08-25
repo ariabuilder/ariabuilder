@@ -94,6 +94,7 @@ const sortableDocument = ref<ComposerLayerRow[]>([])
 let expandTimer: ReturnType<typeof setTimeout> | null = null
 let contextNavigateTimer: ReturnType<typeof setTimeout> | null = null
 let revealFrame: number | null = null
+let preserveInlineOnNextReveal = false
 
 const canMutate = computed(
   () => props.editable && doc?.designActive.value !== false,
@@ -311,7 +312,11 @@ function visibleRows(): ComposerLayerRow[] {
   })
 }
 
-function revealRow(key: string | null, moveFocus = false) {
+function revealRow(
+  key: string | null,
+  moveFocus = false,
+  preserveInline = false,
+) {
   if (!key) return
   if (revealFrame !== null) cancelAnimationFrame(revealFrame)
   revealFrame = null
@@ -321,7 +326,14 @@ function revealRow(key: string | null, moveFocus = false) {
       .find((element) => element.dataset.layerKey === key)
     if (item) {
       if (moveFocus) item.focus({ preventScroll: true })
+      const scrollRegion = preserveInline
+        ? item.closest<HTMLElement>("[data-layer-scroll-region]")
+        : null
+      const scrollLeft = scrollRegion?.scrollLeft
       item.scrollIntoView({ block: "nearest", inline: "nearest" })
+      if (scrollRegion && scrollLeft !== undefined) {
+        scrollRegion.scrollLeft = scrollLeft
+      }
       revealFrame = null
       return
     }
@@ -361,8 +373,12 @@ function selectRow(row: ComposerLayerRow, event?: MouseEvent | KeyboardEvent) {
     }
     return
   }
-  const additive = Boolean(event?.metaKey || event?.ctrlKey)
-  if (event?.shiftKey && selectionAnchorPath.value) {
+  const fromLayerAction = Boolean(
+    event?.currentTarget instanceof Element &&
+    event.currentTarget.closest("[data-layer-actions]"),
+  )
+  const additive = !fromLayerAction && Boolean(event?.metaKey || event?.ctrlKey)
+  if (!fromLayerAction && event?.shiftKey && selectionAnchorPath.value) {
     const visible = visibleRows()
     const anchorIndex = visible.findIndex((item) => item.treeKey === selectionAnchorPath.value)
     const rowIndex = visible.findIndex((item) => item.treeKey === row.treeKey)
@@ -381,6 +397,7 @@ function selectRow(row: ComposerLayerRow, event?: MouseEvent | KeyboardEvent) {
     }
   }
 
+  preserveInlineOnNextReveal = fromLayerAction
   beacon.select(
     { path: row.path, occurrence: row.instance?.occurrence ?? 0 },
     { source: "structure", toggle: additive },
@@ -462,7 +479,9 @@ watch(
       collapsed.value = next
       persistState()
     }
-    revealRow(selected?.treeKey ?? null)
+    const preserveInline = preserveInlineOnNextReveal
+    preserveInlineOnNextReveal = false
+    revealRow(selected?.treeKey ?? null, false, preserveInline)
   },
   { immediate: true },
 )

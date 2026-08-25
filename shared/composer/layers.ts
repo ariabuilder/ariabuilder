@@ -580,7 +580,7 @@ function cmsSemanticLabel(
   node: EditableNode,
   binding: AstroCollectionBinding | null,
 ): string | null {
-  if (!binding) return null;
+  if (!binding || node.kind === "element") return null;
   const collection = binding.collections[0]
     ? titleCase(binding.collections[0])
     : null;
@@ -601,7 +601,9 @@ function buildRow(
     region === "document" &&
     (node.kind === "doctype" || Boolean(tag && SHELL_TAGS.has(tag)));
   const sourceLabel = sourceLabelFor(node);
-  const richTextPreview = isComposerRichTextHost(node)
+  const bindings = options.collectionBindings ?? {};
+  const cmsBinding = directCmsBinding(node, bindings);
+  const richTextPreview = isComposerRichTextHost(node) && !(cmsBinding && node.kind === "element")
     ? composerRichTextPlainText(node)
     : "";
   const baseLabel = isComposerRichTextBlock(node)
@@ -614,8 +616,6 @@ function buildRow(
     : undefined;
   const foldRichTextChildren = shouldFoldTextChildren(node);
   const omitAllChildren = options?.omitBodyChildren === true && tag === "body";
-  const bindings = options.collectionBindings ?? {};
-  const cmsBinding = directCmsBinding(node, bindings);
   const translationBinding = translationField(node, options.translationContexts);
   const label = customLayerLabel(node) ?? (
     translationBinding

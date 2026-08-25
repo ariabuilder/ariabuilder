@@ -16,6 +16,30 @@ async function modelFor(source: string) {
 }
 
 describe("Composer Layers projection", () => {
+  it("keeps semantic element names when their text comes from CMS", async () => {
+    const tree = buildComposerLayerTree(await modelFor(`---
+import { getCollection } from "astro:content";
+/* @aria-cms-query:hero-copy */
+const heroCopy = (await getCollection("site-copy"))
+  .find((entry) => (entry.data.slug ?? entry.id) === "hero");
+/* @aria-cms-query-end:hero-copy */
+---
+<section>
+  <p class="badge"><span class="badge__dot" />{heroCopy?.data?.["eyebrow"] ?? /* @aria-cms-fallback */ "Fallback"}</p>
+  <h1>{heroCopy?.data?.["heading"] ?? /* @aria-cms-fallback */ "Fallback"}</h1>
+  <p>
+    {heroCopy?.data?.["description"] ?? /* @aria-cms-fallback */ "Fallback"}
+  </p>
+  <a href="/"><Icon />{heroCopy?.data?.["primaryActionLabel"] ?? /* @aria-cms-fallback */ "Download"}</a>
+</section>`));
+    expect(tree.content[0]?.children).toMatchObject([
+      { label: "Text", semanticType: "text", hasCmsBinding: true },
+      { label: "Heading", semanticType: "heading", hasCmsBinding: true },
+      { label: "Text", semanticType: "text", hasCmsBinding: true },
+      { label: "Link", semanticType: "link", hasCmsBinding: true },
+    ]);
+  });
+
   it("prefers a persisted custom layer label without changing its source label", async () => {
     const tree = buildComposerLayerTree(
       await modelFor('<section data-aria-layer-label="Campaign hero"><h1>Welcome</h1></section>'),
