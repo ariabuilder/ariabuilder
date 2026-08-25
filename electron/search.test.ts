@@ -73,7 +73,7 @@ describe("project global search", () => {
     const service = new ProjectSearchService({
       scanProject: scanProject as never,
       readCollections: vi.fn(() => ({ collections: [] })) as never,
-      listEntries: vi.fn() as never,
+      listEntryInventory: vi.fn() as never,
       listMedia: vi.fn(() => []) as never,
     });
 
@@ -91,5 +91,35 @@ describe("project global search", () => {
     service.invalidate(root, { category: "structure" });
     await service.searchProject(root, { query: "history", limit: 20 });
     expect(scanProject).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads and sorts each collection entry inventory once", async () => {
+    const listEntryInventory = vi.fn(() => [
+      {
+        entry: { id: "older", updatedAt: "2026-08-24T00:00:00.000Z" },
+        locales: [{ locale: "en", title: "Older", slug: "older", isSource: true }],
+      },
+      {
+        entry: { id: "newer", updatedAt: "2026-08-25T00:00:00.000Z" },
+        locales: [{ locale: "en", title: "Newer", slug: "newer", isSource: true }],
+      },
+    ]);
+    const service = new ProjectSearchService({
+      scanProject: vi.fn(async () => ({ pages: [], components: [], layouts: [] })) as never,
+      readCollections: vi.fn(() => ({
+        collections: [{ id: "posts", name: "posts", label: "Posts" }],
+      })) as never,
+      listEntryInventory: listEntryInventory as never,
+      listMedia: vi.fn(() => []) as never,
+    });
+
+    const response = await service.searchProject(root, { query: "", limit: 100 });
+
+    expect(listEntryInventory).toHaveBeenCalledOnce();
+    expect(
+      response.results
+        .filter((result) => result.kind === "entry")
+        .map((result) => result.label),
+    ).toEqual(["Newer", "Older"]);
   });
 });

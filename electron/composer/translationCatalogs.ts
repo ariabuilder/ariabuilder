@@ -115,7 +115,9 @@ function configuredDefaultLocale(root: string): string | undefined {
       fs.readFileSync(path.join(root, ".aria", "site-settings.json"), "utf8"),
     ) as { localization?: { content?: { defaultLocale?: unknown } } };
     const locale = settings.localization?.content?.defaultLocale;
-    return typeof locale === "string" && locale.trim() ? locale : undefined;
+    return typeof locale === "string" && locale.trim()
+      ? canonicalLocale(locale.trim()) ?? undefined
+      : undefined;
   } catch {
     return undefined;
   }

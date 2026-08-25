@@ -153,4 +153,37 @@ describe("ProjectWatcher", () => {
     expect(watcher.activeWatcherCount()).toBe(4);
     watcher.stop();
   });
+
+  it("rebuilds the current fallback subtree after its watcher errors", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "aria-project-watcher-error-"));
+    roots.push(root);
+    fs.mkdirSync(path.join(root, "src", "nested"), { recursive: true });
+    const sourceWatchers: fs.FSWatcher[] = [];
+    const makeWatcher = (directory: string) => {
+      const nativeWatcher = new EventEmitter() as fs.FSWatcher;
+      nativeWatcher.close = () => undefined;
+      nativeWatcher.ref = () => nativeWatcher;
+      nativeWatcher.unref = () => nativeWatcher;
+      if (path.basename(directory).toLowerCase() === "src") {
+        sourceWatchers.push(nativeWatcher);
+      }
+      return nativeWatcher;
+    };
+    const watcher = new ProjectWatcher(
+      root,
+      () => undefined,
+      () => {
+        throw new Error("recursive watch unavailable");
+      },
+      (directory) => makeWatcher(directory),
+    );
+    watcher.start();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(sourceWatchers).toHaveLength(1);
+    sourceWatchers[0]?.emit("error", new Error("watcher stopped"));
+    expect(sourceWatchers).toHaveLength(2);
+    expect(watcher.activeWatcherCount()).toBe(3);
+    watcher.stop();
+  });
 });

@@ -1,8 +1,9 @@
 import { z } from "zod";
+import type { AriaEntryRecord } from "../shared/cms";
 import type { GlobalSearchResponse, GlobalSearchResult } from "../shared/search";
 import type { ProjectChange } from "../shared/types";
 import { isNavigableScanPage } from "../shared/pages";
-import { listEntries } from "./cms";
+import { store as cmsStore } from "./cms";
 import { readCollections } from "./collections";
 import { listMedia } from "./media";
 import { canonicalDirectory } from "./pathSafety";
@@ -58,14 +59,28 @@ function scoreResult(result: GlobalSearchResult, query: string): number {
 type SearchDependencies = {
   scanProject: typeof scanProject;
   readCollections: typeof readCollections;
-  listEntries: typeof listEntries;
+  listEntryInventory: typeof listEntryInventory;
   listMedia: typeof listMedia;
 };
+
+function listEntryInventory(
+  projectPath: string,
+  collectionId: string,
+): AriaEntryRecord[] {
+  return cmsStore.listEntries(projectPath, collectionId);
+}
+
+function sortEntryInventory(entries: readonly AriaEntryRecord[]): AriaEntryRecord[] {
+  return [...entries].sort((a, b) => {
+    const updated = b.entry.updatedAt.localeCompare(a.entry.updatedAt);
+    return updated || a.entry.id.localeCompare(b.entry.id);
+  });
+}
 
 const defaultDependencies: SearchDependencies = {
   scanProject,
   readCollections,
-  listEntries,
+  listEntryInventory,
   listMedia,
 };
 
@@ -123,14 +138,10 @@ export class ProjectSearchService {
       detail: collection.name,
       collectionName: collection.name,
     });
-      let page = 1;
-      while (true) {
-        const entries = this.dependencies.listEntries(projectPath, {
-          collectionId: collection.id,
-          page,
-          limit: 200,
-        });
-        for (const record of entries.items) {
+      const entries = sortEntryInventory(
+        this.dependencies.listEntryInventory(projectPath, collection.id),
+      );
+      for (const record of entries) {
           const locale = record.locales.find((item) => item.isSource) ?? record.locales[0];
           if (!locale) continue;
           results.push({
@@ -142,9 +153,6 @@ export class ProjectSearchService {
             entryId: record.entry.id,
             locale: locale.locale,
           });
-        }
-        if (entries.page * entries.limit >= entries.total) break;
-        page += 1;
       }
     }
     for (const asset of this.dependencies.listMedia(projectPath)) {

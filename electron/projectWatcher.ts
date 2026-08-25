@@ -240,7 +240,7 @@ export class ProjectWatcher {
       });
       watcher.on("error", () => {
         if (this.fallbackWatchers.get(key) !== watcher) return;
-        this.removeFallbackTree(directory);
+        this.refreshFallbackTree(directory, root);
       });
       this.fallbackWatchers.set(key, watcher);
     } catch {
