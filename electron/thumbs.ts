@@ -715,7 +715,7 @@ export async function captureThumbs(
   const projectPath = opts.projectPath.trim();
   const route = (opts.route.trim() || "/") as string;
   if (!projectPath) return { ok: false, error: "Project path is required" };
-  const url = pagePreviewUrl(opts.baseUrl, route);
+  const url = buildPagePreviewUrl(opts.baseUrl, route);
   if (!url) return { ok: false, error: "Preview URL is invalid" };
 
   const viewport = {
