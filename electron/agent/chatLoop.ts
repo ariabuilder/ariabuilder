@@ -43,7 +43,10 @@ function approvalSecret(
     .digest("hex");
 }
 
-function normalizedProviderError(error: unknown): string {
+function normalizedProviderError(
+  error: unknown,
+  backend?: string,
+): string {
   const raw = error instanceof Error ? error.message : String(error ?? "Provider error");
   const redacted = raw
     .replace(/sk-[a-zA-Z0-9_-]+/g, "[redacted]")
@@ -52,6 +55,9 @@ function normalizedProviderError(error: unknown): string {
     return "The inference provider timed out. Retry the request.";
   }
   if (/401|403|unauthorized|forbidden|api.?key/i.test(redacted)) {
+    if (backend === "opencode") {
+      return "OpenCode rejected the saved API key. Replace it in Settings > Agent with the sk- key copied from your OpenCode account.";
+    }
     return "The inference provider rejected the configured credentials.";
   }
   if (/429|rate.?limit/i.test(redacted)) {
@@ -473,7 +479,7 @@ export async function* runAgentChatStreaming(input: {
         }
         yield {
           type: "error",
-          error: normalizedProviderError(err),
+          error: normalizedProviderError(err, resolved.provider),
         };
         started = true;
         continue;
@@ -510,7 +516,7 @@ export async function* runAgentChatStreaming(input: {
       } else {
         yield {
           type: "error",
-          error: normalizedProviderError(error),
+          error: normalizedProviderError(error, resolved.provider),
         };
       }
       break;

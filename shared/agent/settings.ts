@@ -447,6 +447,13 @@ export const UpdateAgentProviderInputSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    if (value.provider === "opencode" && !value.apiKey.startsWith("sk-")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["apiKey"],
+        message: "OpenCode API keys start with sk-",
+      });
+    }
     if (value.provider === "openai_compatible" && !value.baseUrl?.trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

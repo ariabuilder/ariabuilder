@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CREDENTIAL_BACKEND_IDS,
   InferenceBackendIdSchema,
+  UpdateAgentProviderInputSchema,
   activateConfiguredAgentProviders,
   buildInitialProviderInstance,
   hasEnabledInferenceProvider,
@@ -22,6 +23,33 @@ describe("agent settings (BYOK only)", () => {
   it("rejects workers_ai backend", () => {
     const parsed = InferenceBackendIdSchema.safeParse("workers_ai");
     expect(parsed.success).toBe(false);
+  });
+
+  it("rejects non-key values for OpenCode credentials", () => {
+    const result = UpdateAgentProviderInputSchema.safeParse({
+      provider: "opencode",
+      instanceId: "2bb67ea8-a91c-4eed-ac2f-b90ea70384df",
+      apiKey: "OpenCodeGo",
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error("Expected OpenCode key validation to fail");
+    expect(result.error.issues).toContainEqual(
+      expect.objectContaining({
+        path: ["apiKey"],
+        message: "OpenCode API keys start with sk-",
+      }),
+    );
+  });
+
+  it("accepts the documented OpenCode key prefix", () => {
+    expect(
+      UpdateAgentProviderInputSchema.safeParse({
+        provider: "opencode",
+        instanceId: "2bb67ea8-a91c-4eed-ac2f-b90ea70384df",
+        apiKey: "sk-opencode-key",
+      }).success,
+    ).toBe(true);
   });
 
   it("parses empty settings", () => {
