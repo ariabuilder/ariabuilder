@@ -364,7 +364,7 @@ watch(
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
+  <div class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-sidebar/50">
     <PageHeader
       :title="m.cms_collections_title()"
       :description="m.cms_collections_description()"

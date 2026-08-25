@@ -13,7 +13,7 @@ const { fullscreen } = useWindowFullscreen()
   -->
   <div
     :class="cn(
-      'grid h-svh max-h-svh overflow-hidden bg-background text-foreground',
+      'grid h-svh max-h-svh overflow-hidden bg-background/20 text-foreground',
       'grid-cols-[auto_1fr] grid-rows-[auto_1fr]',
     )"
   >

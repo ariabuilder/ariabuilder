@@ -50,7 +50,7 @@ const defaultCreateLabel = computed(
   <div
     :class="
       cn(
-        'flex shrink-0 justify-between gap-0 overflow-visible bg-background px-7 py-7 max-[40rem]:flex-col max-[40rem]:items-stretch max-[40rem]:gap-4 max-[40rem]:px-4 max-[40rem]:py-5',
+        'flex shrink-0 justify-between gap-0 overflow-visible px-7 py-7',
         props.controlsAlign === 'start' ? 'items-start' : 'items-center',
         props.reserveCloseSpace && 'pr-14',
         props.class,
@@ -58,10 +58,10 @@ const defaultCreateLabel = computed(
     "
   >
     <div class="flex min-w-0 flex-1 select-none items-center gap-3">
-      <div class="min-w-0 space-y-0.5">
+      <div class="min-w-0 space-y-1">
         <slot name="title">
           <h1
-            class="truncate text-2xl font-medium tracking-tight"
+            class="truncate text-2xl font-regular tracking-tight"
           >
             {{ props.title }}
           </h1>
