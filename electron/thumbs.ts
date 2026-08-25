@@ -21,9 +21,7 @@ import {
 } from "./thumbs/componentPreviewUrl";
 import { prioritizeWarmQueue } from "./thumbs/warmQueue";
 
-export type CaptureRect = {
-  x: number;
-  y: number;
+export type CaptureViewport = {
   width: number;
   height: number;
 };
@@ -64,6 +62,8 @@ type PageThumbMeta = {
   route: string;
   mtimeMs: number | null;
   capturedAt: number;
+  /** Capture semantics version. Older captures are regenerated in place. */
+  version: number;
 };
 
 type ComponentThumbMeta = {
@@ -92,11 +92,15 @@ type WarmLayout = {
 const WARM_VIEWPORT = { width: 1280, height: 800 } as const;
 const WARM_SETTLE_MS = 1_800;
 const WARM_LOAD_TIMEOUT_MS = 20_000;
+const PAGE_CAPTURE_ASSET_TIMEOUT_MS = 2_500;
 const COMPONENT_READY_POLL_MS = 50;
 const COMPONENT_STALE_RELOAD_MS = 800;
 const COMPONENT_STALE_RELOAD_MAX = 4;
 /** Extra settle after writing a new harness so Astro/Vite picks it up. */
 const HARNESS_HMR_SETTLE_MS = 2_000;
+
+/** Clean page capture introduced after Stage chrome leaked into cached thumbs. */
+export const PAGE_THUMB_VERSION = 2;
 
 let pageThumbReadyHandler:
   | ((payload: PageThumbReadyPayload) => void)
@@ -304,9 +308,25 @@ function readDataUrl(pngPath: string): string | null {
 function readPageMeta(metaPath: string): PageThumbMeta | null {
   try {
     if (!fs.existsSync(metaPath)) return null;
-    const raw = JSON.parse(fs.readFileSync(metaPath, "utf8")) as PageThumbMeta;
+    const raw = JSON.parse(
+      fs.readFileSync(metaPath, "utf8"),
+    ) as Partial<PageThumbMeta>;
     if (!raw || typeof raw.route !== "string") return null;
-    return raw;
+    return {
+      route: raw.route,
+      mtimeMs:
+        typeof raw.mtimeMs === "number" && Number.isFinite(raw.mtimeMs)
+          ? raw.mtimeMs
+          : null,
+      capturedAt:
+        typeof raw.capturedAt === "number" && Number.isFinite(raw.capturedAt)
+          ? raw.capturedAt
+          : 0,
+      version:
+        typeof raw.version === "number" && Number.isFinite(raw.version)
+          ? raw.version
+          : 0,
+    };
   } catch {
     return null;
   }
@@ -398,6 +418,7 @@ function writePageThumbPng(
     mtimeMs:
       typeof mtimeMs === "number" && Number.isFinite(mtimeMs) ? mtimeMs : null,
     capturedAt: Date.now(),
+    version: PAGE_THUMB_VERSION,
   };
   fs.writeFileSync(pagePaths.meta, JSON.stringify(meta));
   notifyPageThumbReady(projectPath, route);
@@ -463,9 +484,10 @@ function pageThumbIsFresh(
     route.trim() || "/",
   );
   if (!fs.existsSync(paths.png)) return false;
-  if (typeof mtimeMs !== "number" || !Number.isFinite(mtimeMs)) return true;
   const meta = readPageMeta(paths.meta);
-  return meta != null && meta.mtimeMs === mtimeMs;
+  if (!meta || meta.version !== PAGE_THUMB_VERSION) return false;
+  if (typeof mtimeMs !== "number" || !Number.isFinite(mtimeMs)) return true;
+  return meta.mtimeMs === mtimeMs;
 }
 
 function componentThumbIsFresh(
@@ -496,52 +518,283 @@ function layoutThumbIsFresh(
   return meta.mtimeMs === mtimeMs;
 }
 
+type ActiveCaptureJob = {
+  generation: number;
+  cancelled: boolean;
+  window: BrowserWindowType | null;
+};
+
+type PageCaptureReadyResult = {
+  ok?: boolean;
+  error?: string;
+};
+
+const activeCaptureJobs = new Map<string, ActiveCaptureJob>();
+let activeCaptureGeneration = 0;
+
+function destroyCaptureWindow(win: BrowserWindowType | null): void {
+  if (!win) return;
+  try {
+    if (!win.isDestroyed()) win.destroy();
+  } catch {
+    /* already gone */
+  }
+}
+
+function cancelActiveCapture(projectPath: string): void {
+  const job = activeCaptureJobs.get(projectPath);
+  if (!job) return;
+  job.cancelled = true;
+  activeCaptureJobs.delete(projectPath);
+  destroyCaptureWindow(job.window);
+}
+
+/** Stop clean page captures during workspace teardown or app shutdown. */
+export function cancelActiveThumbCaptures(): void {
+  for (const projectPath of [...activeCaptureJobs.keys()]) {
+    cancelActiveCapture(projectPath);
+  }
+}
+
+function activeCaptureIsCurrent(
+  projectPath: string,
+  job: ActiveCaptureJob,
+): boolean {
+  const current = activeCaptureJobs.get(projectPath);
+  if (
+    job.cancelled ||
+    !current ||
+    current !== job ||
+    current.generation !== job.generation
+  ) {
+    return false;
+  }
+  const win = job.window;
+  return Boolean(
+    win && !win.isDestroyed() && !win.webContents.isDestroyed(),
+  );
+}
+
+function createCaptureWindow(viewport: CaptureViewport): BrowserWindowType {
+  const win = new BrowserWindow({
+    width: viewport.width,
+    height: viewport.height,
+    useContentSize: true,
+    frame: false,
+    show: false,
+    paintWhenInitiallyHidden: true,
+    skipTaskbar: true,
+    focusable: false,
+    backgroundColor: "#ffffff",
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      offscreen: true,
+      javascript: true,
+      images: true,
+      webSecurity: true,
+    },
+  });
+  win.webContents.setAudioMuted(true);
+  win.webContents.setBackgroundThrottling(false);
+  return win;
+}
+
+function loadUrlForCapture(
+  win: BrowserWindowType,
+  url: string,
+  job: ActiveCaptureJob,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (job.cancelled || win.isDestroyed()) {
+      reject(new Error("Capture cancelled"));
+      return;
+    }
+    const { webContents } = win;
+    let settled = false;
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Thumbnail capture load timed out"));
+    }, WARM_LOAD_TIMEOUT_MS);
+
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      webContents.removeListener("did-finish-load", onLoad);
+      webContents.removeListener("did-fail-load", onFail);
+      win.removeListener("closed", onClosed);
+    };
+    const onLoad = () => {
+      cleanup();
+      resolve();
+    };
+    const onFail = (
+      _event: unknown,
+      errorCode: number,
+      errorDescription: string,
+      _validatedUrl: string,
+      isMainFrame: boolean,
+    ) => {
+      // Ignore failed subresources and redirects superseded by the final load.
+      if (!isMainFrame || errorCode === -3) return;
+      cleanup();
+      reject(new Error(errorDescription || "Failed to load page"));
+    };
+    const onClosed = () => {
+      cleanup();
+      reject(new Error("Capture cancelled"));
+    };
+
+    webContents.on("did-finish-load", onLoad);
+    webContents.on("did-fail-load", onFail);
+    win.on("closed", onClosed);
+    void win.loadURL(url).catch((error: unknown) => {
+      if (settled) return;
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    });
+  });
+}
+
+export function pageCaptureReadyScript(captureHeight: number): string {
+  return `(() => {
+    const captureHeight = ${JSON.stringify(captureHeight)};
+    const failure = () => {
+      if (document.querySelector("vite-error-overlay")) return "Preview error overlay";
+      if (document.title === "Error") return "Preview error page";
+      return "";
+    };
+    const initialFailure = failure();
+    if (initialFailure) return Promise.resolve({ ok: false, error: initialFailure });
+    const images = [...document.images].filter((image) => {
+      const rect = image.getBoundingClientRect();
+      return rect.bottom > 0 && rect.top < captureHeight && rect.right > 0;
+    });
+    const waitForImage = (image) => {
+      if (image.complete) {
+        return typeof image.decode === "function"
+          ? image.decode().catch(() => undefined)
+          : Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        image.addEventListener("load", resolve, { once: true });
+        image.addEventListener("error", resolve, { once: true });
+      });
+    };
+    const assets = Promise.all([
+      document.fonts?.ready ?? Promise.resolve(),
+      ...images.map(waitForImage),
+    ]);
+    const timeout = new Promise((resolve) => {
+      setTimeout(resolve, ${PAGE_CAPTURE_ASSET_TIMEOUT_MS});
+    });
+    return Promise.race([assets, timeout])
+      .then(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }))
+      .then(() => {
+        const finalFailure = failure();
+        return finalFailure
+          ? { ok: false, error: finalFailure }
+          : { ok: true };
+      });
+  })()`;
+}
+
+async function waitForPageCaptureReady(
+  win: BrowserWindowType,
+  captureHeight: number,
+): Promise<void> {
+  const result = (await win.webContents.executeJavaScript(
+    pageCaptureReadyScript(captureHeight),
+  )) as PageCaptureReadyResult;
+  if (!result?.ok) {
+    throw new Error(result?.error || "Page did not become ready for capture");
+  }
+}
+
+/**
+ * Render the selected route in a hidden top-level page. The visible app window
+ * is never the capture source, so Composer selection chrome cannot leak in.
+ */
 export async function captureThumbs(
-  win: BrowserWindowType | null,
   userData: string,
   opts: {
     projectPath: string;
+    baseUrl: string;
     route: string;
-    rect: CaptureRect;
+    viewport: CaptureViewport;
+    captureHeight: number;
     mtimeMs?: number | null;
   },
 ): Promise<ThumbCaptureResult> {
-  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
-    return { ok: false, error: "No window" };
-  }
-
   const projectPath = opts.projectPath.trim();
   const route = (opts.route.trim() || "/") as string;
   if (!projectPath) return { ok: false, error: "Project path is required" };
+  const url = pagePreviewUrl(opts.baseUrl, route);
+  if (!url) return { ok: false, error: "Preview URL is invalid" };
 
-  const rect = {
-    x: Math.max(0, Math.round(opts.rect.x)),
-    y: Math.max(0, Math.round(opts.rect.y)),
-    width: Math.max(1, Math.round(opts.rect.width)),
-    height: Math.max(1, Math.round(opts.rect.height)),
+  const viewport = {
+    width: Math.max(1, Math.round(opts.viewport.width)),
+    height: Math.max(1, Math.round(opts.viewport.height)),
   };
+  const captureHeight = Math.min(
+    viewport.height,
+    Math.max(1, Math.round(opts.captureHeight)),
+  );
+
+  cancelActiveCapture(projectPath);
+  const win = createCaptureWindow(viewport);
+  const job: ActiveCaptureJob = {
+    generation: ++activeCaptureGeneration,
+    cancelled: false,
+    window: win,
+  };
+  activeCaptureJobs.set(projectPath, job);
 
   try {
-    const image = await win.webContents.capturePage(rect);
+    await loadUrlForCapture(win, url, job);
+    if (!activeCaptureIsCurrent(projectPath, job)) {
+      throw new Error("Capture superseded");
+    }
+    const loadedUrl = new URL(win.webContents.getURL());
+    if (loadedUrl.origin !== new URL(url).origin) {
+      throw new Error("Preview redirected outside the project origin");
+    }
+    await waitForPageCaptureReady(win, captureHeight);
+    if (!activeCaptureIsCurrent(projectPath, job)) {
+      throw new Error("Capture superseded");
+    }
+
+    const image = await win.webContents.capturePage(
+      { x: 0, y: 0, width: viewport.width, height: captureHeight },
+      { stayHidden: true },
+    );
+    if (!activeCaptureIsCurrent(projectPath, job)) {
+      throw new Error("Capture superseded");
+    }
     if (isBlankCapture(image)) {
       return { ok: false, error: "Blank capture" };
     }
 
-    const resized = image.resize({ width: 640 });
-    const png = resized.toPNG();
-
+    const png = image.resize({ width: 640 }).toPNG();
     const projectPaths = projectThumbPaths(userData, projectPath);
     fs.mkdirSync(path.dirname(projectPaths.png), { recursive: true });
     fs.writeFileSync(projectPaths.png, png);
-
     writePageThumbPng(userData, projectPath, route, png, opts.mtimeMs);
-
     return { ok: true };
   } catch (error) {
     return {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     };
+  } finally {
+    if (activeCaptureJobs.get(projectPath) === job) {
+      activeCaptureJobs.delete(projectPath);
+    }
+    destroyCaptureWindow(win);
   }
 }
 
@@ -722,6 +975,7 @@ export function cancelWarmThumbs(): void {
 /** @deprecated Prefer cancelWarmThumbs — shared cancel for page + component warm. */
 export function cancelWarmPageThumbs(): void {
   cancelWarmThumbs();
+  cancelActiveThumbCaptures();
 }
 
 /**

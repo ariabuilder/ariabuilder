@@ -94,6 +94,7 @@ export function createRendererSmokeController(
     if (!shouldRun() || win.isDestroyed()) return;
     let translationDiscovery = false;
     let terminalStarted = false;
+    let thumbnailCaptureOk = false;
     try {
       if (isSmokeOpen && bootProject) {
         trustProject(options.userDataPath, bootProject, "smoke");
@@ -221,6 +222,109 @@ export function createRendererSmokeController(
           "terminal startup IPC",
           15_000,
         );
+
+        await win.webContents.executeJavaScript(`(() => {
+          const overlay = document.createElement("div");
+          overlay.id = "aria-smoke-thumbnail-overlay";
+          overlay.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:#ff00ff";
+          document.body.appendChild(overlay);
+        })()`);
+        let captureResult;
+        try {
+          captureResult = await withSmokeTimeout(
+            win.webContents.executeJavaScript(
+              `window.aria.thumbs.capture({
+                projectPath: ${JSON.stringify(bootProject)},
+                baseUrl: ${JSON.stringify(runtimeSession.previewUrl)},
+                route: "/",
+                viewport: { width: 768, height: 1024 },
+                captureHeight: 576,
+                mtimeMs: null,
+              })`,
+            ),
+            "clean page thumbnail capture",
+            30_000,
+          );
+        } finally {
+          await win.webContents.executeJavaScript(
+            `document.getElementById("aria-smoke-thumbnail-overlay")?.remove()`,
+          ).catch(() => undefined);
+        }
+        if (!captureResult || captureResult.ok !== true) {
+          throw new Error(
+            captureResult?.error ?? "Clean page thumbnail capture failed",
+          );
+        }
+        const cachedThumbs = await withSmokeTimeout(
+          win.webContents.executeJavaScript(
+            `Promise.all([
+              window.aria.thumbs.getPage({
+                projectPath: ${JSON.stringify(bootProject)},
+                route: "/",
+                mtimeMs: null,
+              }),
+              window.aria.thumbs.getProject(${JSON.stringify(projectSession.path)}),
+            ])`,
+          ),
+          "clean page thumbnail cache lookup",
+        );
+        thumbnailCaptureOk =
+          Array.isArray(cachedThumbs) &&
+          cachedThumbs.length === 2 &&
+          cachedThumbs.every(
+            (thumb) =>
+              thumb &&
+              typeof thumb.dataUrl === "string" &&
+              thumb.dataUrl.startsWith("data:image/png;base64,"),
+          );
+        if (!thumbnailCaptureOk) {
+          const cacheSummary = Array.isArray(cachedThumbs)
+            ? cachedThumbs.map((thumb) =>
+                thumb && typeof thumb.dataUrl === "string"
+                  ? `data:${thumb.dataUrl.length}`
+                  : "missing",
+              )
+            : ["invalid"];
+          throw new Error(
+            `Clean page thumbnail was not cached for page and project (${cacheSummary.join(", ")})`,
+          );
+        }
+        const pageThumbDataUrl = (
+          cachedThumbs as Array<{ dataUrl?: unknown }>
+        )[0]?.dataUrl;
+        const magentaPixelRatio = await withSmokeTimeout(
+          win.webContents.executeJavaScript(`new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => {
+              const canvas = document.createElement("canvas");
+              canvas.width = image.naturalWidth;
+              canvas.height = image.naturalHeight;
+              const context = canvas.getContext("2d", { willReadFrequently: true });
+              if (!context) {
+                reject(new Error("Thumbnail canvas context unavailable"));
+                return;
+              }
+              context.drawImage(image, 0, 0);
+              const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+              let magenta = 0;
+              for (let index = 0; index < pixels.length; index += 16) {
+                if (pixels[index] > 240 && pixels[index + 1] < 20 && pixels[index + 2] > 240) {
+                  magenta += 1;
+                }
+              }
+              resolve(magenta / Math.ceil(pixels.length / 16));
+            };
+            image.onerror = () => reject(new Error("Thumbnail PNG could not be decoded"));
+            image.src = ${JSON.stringify(pageThumbDataUrl)};
+          })`),
+          "clean page thumbnail pixel inspection",
+        );
+        if (
+          typeof magentaPixelRatio !== "number" ||
+          magentaPixelRatio > 0.01
+        ) {
+          throw new Error("Composer overlay leaked into the page thumbnail");
+        }
       }
 
       const { version, sessionList } = await waitForSmokeIpc(win.webContents);
@@ -261,6 +365,7 @@ export function createRendererSmokeController(
             "authoringState" in item &&
             item.authoringState === "ready",
         );
+      report.thumbnailCaptureOk = thumbnailCaptureOk;
       report.ipcOk = typeof version === "string" && report.sessionCount !== null;
       report.translationDiscovery = translationDiscovery;
       report.terminalStarted = terminalStarted;
@@ -276,7 +381,8 @@ export function createRendererSmokeController(
           report.runtimeLive &&
           report.authoringReady &&
           report.translationDiscovery &&
-          report.terminalStarted
+          report.terminalStarted &&
+          report.thumbnailCaptureOk
         ));
       if (valid) {
         console.log(

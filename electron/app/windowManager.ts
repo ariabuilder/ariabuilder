@@ -261,7 +261,10 @@ export function createWindowManager(options: WindowManagerOptions): WindowManage
       }
     });
 
-    const projectQuery = bootProject
+    // The packaged smoke controller owns project/session startup. Loading the
+    // same project in the renderer would start a second runtime and schedule a
+    // competing thumbnail capture, making the smoke nondeterministic.
+    const projectQuery = bootProject && !smoke.shouldRun()
       ? `project=${encodeURIComponent(bootProject)}`
       : null;
     const loadTarget =

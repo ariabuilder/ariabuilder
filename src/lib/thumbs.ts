@@ -1,5 +1,5 @@
 import type {
-  CaptureRect,
+  CaptureViewport,
   ComponentThumbReadyPayload,
   LayoutThumbReadyPayload,
   PageThumbReadyPayload,
@@ -9,7 +9,7 @@ import type {
 } from "@/types/aria";
 
 export type {
-  CaptureRect,
+  CaptureViewport,
   ComponentThumbReadyPayload,
   LayoutThumbReadyPayload,
   PageThumbReadyPayload,
@@ -92,8 +92,10 @@ export function invalidateComponentThumbCache(opts: {
 
 export function captureThumbs(opts: {
   projectPath: string;
+  baseUrl: string;
   route: string;
-  rect: CaptureRect;
+  viewport: CaptureViewport;
+  captureHeight: number;
   mtimeMs?: number | null;
 }): Promise<ThumbCaptureResult> {
   return api().capture(opts);

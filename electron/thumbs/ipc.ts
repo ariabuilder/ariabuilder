@@ -1,6 +1,18 @@
 import { type IpcMainInvokeEvent } from "../electron-api";
 import { getSession, requireOpenSession } from "../sessions";
-import { cancelWarmPageThumbs, captureThumbs, getComponentThumb, getLayoutThumb, getPageThumb, getProjectThumb, prioritizeComponentThumbs, warmComponentThumbs, warmLayoutThumbs, warmPageThumbs, type CaptureRect } from "../thumbs";
+import {
+  cancelWarmPageThumbs,
+  captureThumbs,
+  getComponentThumb,
+  getLayoutThumb,
+  getPageThumb,
+  getProjectThumb,
+  prioritizeComponentThumbs,
+  warmComponentThumbs,
+  warmLayoutThumbs,
+  warmPageThumbs,
+  type CaptureViewport,
+} from "../thumbs";
 import type { IpcRegistrar, IpcRuntimeContext } from "../ipc/registrar";
 
 export function registerThumbsIpc(
@@ -9,40 +21,65 @@ export function registerThumbsIpc(
 ): void {
   const { handle } = registrar;
   handle(
-      "thumbs:capture",
-      (
-        event: IpcMainInvokeEvent,
-        opts: {
-          projectPath?: string;
-          route?: string;
-          rect?: CaptureRect;
-          mtimeMs?: number | null;
-        },
-      ) => {
-        if (!opts || typeof opts.projectPath !== "string" || !opts.projectPath.trim()) {
-          throw new Error("Project path is required");
-        }
-        if (!opts.rect || typeof opts.rect !== "object") {
-          throw new Error("Capture rect is required");
-        }
-        const { x, y, width, height } = opts.rect;
-        if (
-          ![x, y, width, height].every(
-            (n) => typeof n === "number" && Number.isFinite(n),
-          ) || x < 0 || y < 0 || width <= 0 || height <= 0 ||
-          width > 4096 || height > 4096 || width * height > 12_000_000
-        ) {
-          throw new Error("Capture rect is invalid");
-        }
-        const root = requireOpenSession(opts.projectPath);
-        return captureThumbs(context.senderWindow(event), context.userDataPath, {
-          projectPath: root,
-          route: typeof opts.route === "string" ? opts.route : "/",
-          rect: { x, y, width, height },
-          mtimeMs: opts.mtimeMs,
-        });
+    "thumbs:capture",
+    (
+      _event: IpcMainInvokeEvent,
+      opts: {
+        projectPath?: string;
+        baseUrl?: string;
+        route?: string;
+        viewport?: CaptureViewport;
+        captureHeight?: number;
+        mtimeMs?: number | null;
       },
-    );
+    ) => {
+      if (
+        !opts ||
+        typeof opts.projectPath !== "string" ||
+        !opts.projectPath.trim()
+      ) {
+        throw new Error("Project path is required");
+      }
+      if (typeof opts.baseUrl !== "string" || !opts.baseUrl.trim()) {
+        throw new Error("Preview URL is required");
+      }
+      if (!opts.viewport || typeof opts.viewport !== "object") {
+        throw new Error("Capture viewport is required");
+      }
+      const { width, height } = opts.viewport;
+      const captureHeight = opts.captureHeight;
+      if (
+        typeof width !== "number" ||
+        !Number.isFinite(width) ||
+        typeof height !== "number" ||
+        !Number.isFinite(height) ||
+        typeof captureHeight !== "number" ||
+        !Number.isFinite(captureHeight) ||
+        width <= 0 ||
+        height <= 0 ||
+        captureHeight <= 0 ||
+        width > 4096 ||
+        height > 4096 ||
+        width * height > 12_000_000 ||
+        captureHeight > height
+      ) {
+        throw new Error("Capture viewport is invalid");
+      }
+      const root = requireOpenSession(opts.projectPath);
+      const session = getSession(root);
+      if (!session?.previewUrl || opts.baseUrl !== session.previewUrl) {
+        throw new Error("Preview URL does not match the open project session");
+      }
+      return captureThumbs(context.userDataPath, {
+        projectPath: root,
+        baseUrl: opts.baseUrl,
+        route: typeof opts.route === "string" ? opts.route : "/",
+        viewport: { width, height },
+        captureHeight,
+        mtimeMs: opts.mtimeMs,
+      });
+    },
+  );
 
   handle(
       "thumbs:getPage",

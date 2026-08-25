@@ -1373,24 +1373,7 @@ watch(
 )
 
 const SETTLE_MS = 2500
-/** Retry delay when chrome (switchers, menus) covers the preview. */
-const OCCLUDED_RETRY_MS = 600
 const MIN_CAPTURE_PX = 100
-/**
- * Portaled overlays that can hang over the stage from the header/chrome.
- * Point sampling alone misses these when they only cover the top of the iframe.
- */
-const OVERLAY_SELECTOR = [
-  '[data-slot="popover-content"]',
-  '[data-slot="dropdown-menu-content"]',
-  '[data-slot="dropdown-menu-sub-content"]',
-  '[data-slot="context-menu-content"]',
-  '[data-slot="context-menu-sub-content"]',
-  '[data-slot="dialog-overlay"]',
-  '[data-slot="dialog-content"]',
-  '[data-slot="alert-dialog-overlay"]',
-  '[data-slot="alert-dialog-content"]',
-].join(", ")
 
 let captureTimer: ReturnType<typeof setTimeout> | null = null
 let captureGen = 0
@@ -1402,100 +1385,29 @@ function clearCaptureTimer() {
   }
 }
 
-function rectsIntersect(
-  a: { left: number; top: number; right: number; bottom: number },
-  b: { left: number; top: number; right: number; bottom: number },
-): boolean {
-  return (
-    a.left < b.right &&
-    a.right > b.left &&
-    a.top < b.bottom &&
-    a.bottom > b.top
-  )
-}
-
-/** True when a floating overlay overlaps the band we would capture. */
-function overlayOccludesCapture(capture: {
-  left: number
-  top: number
-  right: number
-  bottom: number
-}): boolean {
-  const nodes = document.querySelectorAll(OVERLAY_SELECTOR)
-  for (const node of nodes) {
-    if (!(node instanceof HTMLElement)) continue
-    // Ignore Presence leftovers mid close-animation / unmount.
-    if (node.getAttribute("data-state") === "closed") continue
-    const r = node.getBoundingClientRect()
-    if (r.width < 1 || r.height < 1) continue
-    if (rectsIntersect(capture, r)) return true
-  }
-  return false
-}
-
-function previewIsOccluded(iframeRect: DOMRect, captureHeight: number): boolean {
-  const capture = {
-    left: iframeRect.left,
-    top: iframeRect.top,
-    right: iframeRect.right,
-    bottom: iframeRect.top + captureHeight,
-    width: iframeRect.width,
-    height: captureHeight,
-  }
-
-  if (overlayOccludesCapture(capture)) return true
-
-  // Include top-of-band samples — header switchers hang here, not mid-frame.
-  const samples = [
-    [0.2, 0.08],
-    [0.5, 0.08],
-    [0.8, 0.08],
-    [0.25, 0.35],
-    [0.5, 0.4],
-    [0.75, 0.35],
-  ] as const
-  for (const [fx, fy] of samples) {
-    const x = capture.left + capture.width * fx
-    const y = capture.top + capture.height * fy
-    const el = document.elementFromPoint(x, y)
-    if (!el) continue
-    if (iframeEl.value && (el === iframeEl.value || iframeEl.value.contains(el))) {
-      continue
-    }
-    // Anything else sitting on the preview counts as occlusion.
-    return true
-  }
-  return false
-}
-
 async function runCapture(gen: number) {
   if (gen !== captureGen) return
   if (!isLive.value || !iframeEl.value || (props.displayMode ?? "normal") !== "normal") return
+  const baseUrl = props.runtime?.previewUrl
+  if (!baseUrl) return
 
   const el = iframeEl.value
   const rect = el.getBoundingClientRect()
   if (rect.width < MIN_CAPTURE_PX || rect.height < MIN_CAPTURE_PX) return
 
-  const height = Math.min(rect.height, rect.width * 0.75)
-  if (previewIsOccluded(rect, height)) {
-    // Menu mid-selection — retry until chrome clears instead of baking it in.
-    scheduleCapture(OCCLUDED_RETRY_MS)
-    return
-  }
-
-  // Re-check after occlusion work — server may have stopped mid-settle.
-  if (gen !== captureGen || !isLive.value) return
+  const captureHeight = Math.min(rect.height, rect.width * 0.75)
+  if (gen !== captureGen || !isLive.value || props.runtime?.previewUrl !== baseUrl) return
 
   try {
     await captureThumbs({
       projectPath: props.projectPath,
+      baseUrl,
       route: props.selectedRoute ?? "/",
-      rect: {
-        x: rect.x,
-        y: rect.y,
+      viewport: {
         width: rect.width,
-        height,
+        height: rect.height,
       },
+      captureHeight,
       mtimeMs: props.pageMtimeMs ?? null,
     })
   } catch {
