@@ -56,7 +56,7 @@
     "test:integration": "npm run test:prepare && vitest run --project=integration",
     "test:all": "npm run test:prepare && vitest run",
     "test:composer": "npm run test:prepare && vitest run shared/composer electron/composer src/workspace/composer",
-    "test:fast": "npm run typecheck && npm run check:architecture && npm run check:test-architecture && npm run test:all && npm run smoke:project && npm run smoke:runtime && npm run smoke:git",
+    "test:fast": "npm run typecheck && npm run check:architecture && npm run check:test-architecture && npm run test:all && npm run smoke:project && npm run smoke:runtime && npm run smoke:git && npm run smoke:cms-bindings",
     "test": "npm run test:fast && npm run build && npm run smoke:packaged",
     "audit:production": "npm audit --omit=dev --audit-level=low"
   },

@@ -62,7 +62,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Unit and runtime checks
-        run: npm run test:all && npm run smoke:project && npm run smoke:runtime && npm run smoke:git
+        run: npm run test:all && npm run smoke:project && npm run smoke:runtime && npm run smoke:git && npm run smoke:cms-bindings
 
       - name: Audit production dependencies
         run: npm run audit:production
@@ -134,7 +134,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Unit and runtime checks
-        run: npm run test:all && npm run smoke:project && npm run smoke:runtime && npm run smoke:git
+        run: npm run test:all && npm run smoke:project && npm run smoke:runtime && npm run smoke:git && npm run smoke:cms-bindings
 
       - name: Audit production dependencies
         run: npm run audit:production
@@ -192,7 +192,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Unit and runtime checks
-        run: npm run test:all && npm run smoke:project && npm run smoke:runtime && npm run smoke:git
+        run: npm run test:all && npm run smoke:project && npm run smoke:runtime && npm run smoke:git && npm run smoke:cms-bindings
 
       - name: Audit production dependencies
         run: npm run audit:production
@@ -251,7 +251,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Unit and runtime checks
-        run: npm run test:all && npm run smoke:project && npm run smoke:runtime && npm run smoke:git
+        run: npm run test:all && npm run smoke:project && npm run smoke:runtime && npm run smoke:git && npm run smoke:cms-bindings
 
       - name: Audit production dependencies
         run: npm run audit:production
