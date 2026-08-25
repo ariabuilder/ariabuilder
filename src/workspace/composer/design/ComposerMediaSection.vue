@@ -54,11 +54,19 @@ const src = computed(() => stringFieldDisplay(props.node.props.src).text)
 const poster = computed(() => stringFieldDisplay(props.node.props.poster).text)
 const previewSrc = ref("")
 const previewFailed = ref(false)
+const renderedSrc = ref("")
+const renderedAlt = ref("")
+let renderedMediaRequestGeneration = 0
 const style = computed(() => parseStyleAttr(stringFieldDisplay(props.node.props.style).text))
 const fit = computed(() => style.value["object-fit"] ?? "cover")
 const objectPosition = computed(() => style.value["object-position"] ?? "center")
 const aspectRatio = computed(() => style.value["aspect-ratio"] ?? "")
 const dynamicSrc = computed(() => Boolean(props.node.props.src && props.node.props.src.type !== "string"))
+const dynamicAlt = computed(() => Boolean(props.node.props.alt && props.node.props.alt.type !== "string"))
+const previewSource = computed(() => dynamicSrc.value ? renderedSrc.value : src.value)
+const altText = computed(() => dynamicAlt.value
+  ? renderedAlt.value
+  : stringFieldDisplay(props.node.props.alt).text)
 const ownedProps = computed(() => isImage.value
   ? ["src", "alt", "width", "height", "srcset", "sizes", "loading"]
   : ["src", "poster", "aria-label", "autoplay", "muted", "loop", "controls", "playsinline", "preload"])
@@ -80,8 +88,27 @@ function isImagePlaceholderSource(value: string): boolean {
 
 const isPlaceholderSource = computed(() => isImagePlaceholderSource(src.value))
 
+function projectMediaPathnameForSource(value: string): string {
+  const source = value.trim()
+  try {
+    const parsed = new URL(source)
+    const isLoopbackPreview = parsed.protocol === "http:"
+      && ["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname)
+    if (isLoopbackPreview) {
+      try {
+        return decodeURIComponent(parsed.pathname)
+      } catch {
+        return parsed.pathname
+      }
+    }
+  } catch {
+    // Relative project media paths are handled below.
+  }
+  return source.split(/[?#]/, 1)[0] ?? ""
+}
+
 function projectMediaIdForSource(value: string): string | null {
-  const pathname = value.trim().split(/[?#]/, 1)[0] ?? ""
+  const pathname = projectMediaPathnameForSource(value)
   if (pathname.startsWith("/src/assets/")) return pathname.slice(1)
   if (/^\/[A-Za-z0-9._-]+\/.+\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp|mp4|m4v|mov|ogv|webm)$/i.test(pathname)) {
     return `public${pathname}`
@@ -90,7 +117,7 @@ function projectMediaIdForSource(value: string): string | null {
 }
 
 function transformAssetIdForSource(value: string): string | null {
-  const pathname = value.trim().split(/[?#]/, 1)[0] ?? ""
+  const pathname = projectMediaPathnameForSource(value)
   if (!pathname || isImagePlaceholderSource(pathname)) return null
   const variantFolder = pathname.match(/^\/uploads\/variants\/([^/]+)\//)?.[1]
   if (variantFolder) return variantFolder.replace(/__/g, "/")
@@ -160,7 +187,7 @@ function openLibraryPicker() {
 }
 
 watch(
-  [src, () => inspector?.projectPath.value ?? ""],
+  [previewSource, () => inspector?.projectPath.value ?? ""],
   async ([value, projectPath]) => {
     if (!value) {
       previewRequestGeneration += 1
@@ -206,6 +233,31 @@ watch(
     }
   },
   { immediate: true },
+)
+
+watch(
+  [
+    () => props.node.id,
+    mediaPath,
+    dynamicSrc,
+    dynamicAlt,
+    src,
+    () => stringFieldDisplay(props.node.props.alt).text,
+  ],
+  async ([, path, sourceIsDynamic, altIsDynamic]) => {
+    const request = ++renderedMediaRequestGeneration
+    renderedSrc.value = ""
+    renderedAlt.value = ""
+    if (!path || (!sourceIsDynamic && !altIsDynamic) || !inspector) return
+    const values = await inspector.document.computedStyle({
+      path,
+      properties: ["aria-rendered-src", "aria-rendered-alt"],
+    })
+    if (request !== renderedMediaRequestGeneration) return
+    renderedSrc.value = values["aria-rendered-src"] ?? ""
+    renderedAlt.value = values["aria-rendered-alt"] ?? ""
+  },
+  { immediate: true, flush: "post" },
 )
 
 function handlePreviewError() {
@@ -449,6 +501,7 @@ watch(
 onBeforeUnmount(() => {
   mediaRequestGeneration += 1
   previewRequestGeneration += 1
+  renderedMediaRequestGeneration += 1
   previewAssetId = ""
 })
 
@@ -512,7 +565,7 @@ defineExpose({ selectSource, selectVariant })
       </div>
       <p v-if="dynamicSrc || sourceMode === 'collection'" class="rounded-md border border-dashed border-border/70 p-2 text-[10px] text-muted-foreground">{{ dynamicSrc ? 'Source is expression-bound. Use Props → CMS to detach or replace it.' : 'Choose this element’s src target in Props → CMS to bind a collection field.' }}</p>
       <div v-else-if="sourceMode === 'url'" class="grid grid-cols-[68px_1fr] items-center gap-2"><span class="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">URL</span><Input :model-value="src" class="h-8 min-w-0 text-xs" type="url" :disabled="disabled" @change="setString('src', ($event.target as HTMLInputElement).value)" /></div>
-      <label v-if="isImage" class="grid grid-cols-[68px_1fr] items-center gap-2"><span class="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Alt text</span><Input :model-value="stringFieldDisplay(node.props.alt).text" class="h-8 text-xs" :disabled="disabled || node.props.alt?.type !== 'string' && Boolean(node.props.alt)" @change="setString('alt', ($event.target as HTMLInputElement).value)" /></label>
+      <label v-if="isImage" class="grid grid-cols-[68px_1fr] items-center gap-2"><span class="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Alt text</span><Input :model-value="altText" class="h-8 text-xs" :disabled="disabled || dynamicAlt" @change="setString('alt', ($event.target as HTMLInputElement).value)" /></label>
       <template v-else>
         <div class="grid grid-cols-[68px_1fr] items-center gap-2"><span class="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Poster</span><div class="flex gap-1"><Input :model-value="poster" class="h-8 min-w-0 text-xs" :disabled="disabled || propIsDynamic('poster')" @change="setString('poster', ($event.target as HTMLInputElement).value)" /><Button type="button" size="sm" variant="outline" class="h-8" :disabled="disabled || propIsDynamic('poster')" @click="posterPickerOpen = true">Media</Button></div></div>
         <label class="grid grid-cols-[68px_1fr] items-center gap-2"><span class="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Label</span><Input :model-value="stringFieldDisplay(node.props['aria-label']).text" class="h-8 text-xs" :disabled="disabled || propIsDynamic('aria-label')" @change="setString('aria-label', ($event.target as HTMLInputElement).value)" /></label>

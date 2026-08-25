@@ -419,7 +419,7 @@ function canRenameRow(row: ComposerLayerRow): boolean {
     !row.presentationOnly &&
     !row.sourceLocked &&
     row.deletable &&
-    row.kind === "element",
+    (row.kind === "element" || row.kind === "component"),
   )
 }
 

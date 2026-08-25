@@ -40,6 +40,30 @@ const heroCopy = (await getCollection("site-copy"))
     ]);
   });
 
+  it("keeps a nested StatementBanner CMS heading semantic in Layers", async () => {
+    const tree = buildComposerLayerTree(await modelFor(`---
+import { getCollection } from "astro:content";
+/* @aria-cms-query:site-copy-cms-statement */
+const statement = (await getCollection("site-copy"))
+  .find((entry) => (entry.data.slug ?? entry.id) === "cms-statement");
+/* @aria-cms-query-end:site-copy-cms-statement */
+---
+<h2 class="statement__line">
+  <span class="text-reveal"><span class="text-reveal__line">
+    {statement?.data?.["heading"] ?? /* @aria-cms-fallback */ "A CMS built into the workspace."}
+  </span></span>
+</h2>`));
+    expect(tree.content[0]).toMatchObject({
+      label: "Heading",
+      semanticType: "heading",
+      hasCmsBinding: true,
+      cmsCollections: ["site-copy"],
+      cmsBindingCount: 1,
+    });
+    expect(tree.content[0]?.label).not.toContain("statement?.data");
+    expect(tree.content[0]?.searchText).not.toContain("statement?.data");
+  });
+
   it("prefers a persisted custom layer label without changing its source label", async () => {
     const tree = buildComposerLayerTree(
       await modelFor('<section data-aria-layer-label="Campaign hero"><h1>Welcome</h1></section>'),
@@ -50,6 +74,20 @@ const heroCopy = (await getCollection("site-copy"))
       semanticType: "section",
     });
     expect(tree.content[0]?.searchText).toContain("campaign hero");
+  });
+
+  it("uses a persisted custom label for a component instance", async () => {
+    const tree = buildComposerLayerTree(
+      await modelFor(`---
+import Hero from "./Hero.astro";
+---
+<Hero data-aria-layer-label="Primary hero" />`),
+    );
+    expect(tree.content[0]).toMatchObject({
+      kind: "component",
+      label: "Primary hero",
+      sourceLabel: "<Hero>",
+    });
   });
 
   it("uses ephemeral project-data analysis for a meaningful loop label", async () => {

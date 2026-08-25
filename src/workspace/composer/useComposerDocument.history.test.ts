@@ -162,4 +162,49 @@ describe("useComposerDocument history", () => {
     await doc.redo()
     expect(serializeAstro(model.value!)).not.toContain("<a")
   })
+
+  it("restores the primary Astro source byte-for-byte through undo and redo", async () => {
+    const source = `<section   data-note='keep'>\n  <h1>{heroCopy?.data?.["heading"]}</h1>\n  <p>Keep</p>\n</section>\n`
+    const parsed = await parseAstro(source)
+    if (!parsed.editable) throw new Error(parsed.reason)
+    const model = ref<AstroDocumentModel | null>(parsed.model)
+    const exactSource = ref<string | null>(source)
+    const beacon = createComposerBeacon()
+    beacon.illuminate("0.0.0")
+    const doc = useComposerDocument({
+      projectPath: ref("/tmp/project"),
+      editFile: ref<string | null>("src/pages/index.astro"),
+      editedMtimeMs: ref<number | null>(1000),
+      model,
+      editable: ref(true),
+      designActive: ref(true),
+      exactSource,
+      onExactSourcePersisted: (next) => { exactSource.value = next },
+      codeDirty: ref(false),
+      beacon,
+    })
+
+    const changedExpression = '{heroCopy?.data?.["title"]}'
+    expect(doc.setSelectedText(changedExpression)).toBe(true)
+    await doc.flushSave()
+    const changedSource = source.replace(
+      '{heroCopy?.data?.["heading"]}',
+      changedExpression,
+    )
+    expect(exactSource.value).toBe(changedSource)
+
+    await doc.undo()
+    expect(exactSource.value).toBe(source)
+    expect(commitComposerEditTransaction.mock.calls[1]?.[0].sources[0]).toMatchObject({
+      source,
+      expectedSource: changedSource,
+    })
+
+    await doc.redo()
+    expect(exactSource.value).toBe(changedSource)
+    expect(commitComposerEditTransaction.mock.calls[2]?.[0].sources[0]).toMatchObject({
+      source: changedSource,
+      expectedSource: source,
+    })
+  })
 })

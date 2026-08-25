@@ -32,6 +32,7 @@ function layer(overrides: Partial<ComposerLayerRow> = {}): ComposerLayerRow {
 function mountNode(row: ComposerLayerRow) {
   const host = document.createElement("div")
   document.body.append(host)
+  const open = vi.fn()
   const select = vi.fn()
   const menuAction = vi.fn()
   const Harness = defineComponent({
@@ -47,6 +48,7 @@ function mountNode(row: ComposerLayerRow) {
           selectedRow: ComposerLayerRow,
           event?: MouseEvent | KeyboardEvent,
         ) => select(selectedRow, event),
+        open,
         row,
       }
     },
@@ -63,6 +65,7 @@ function mountNode(row: ComposerLayerRow) {
           :drop-candidate="null"
           :can-sort="canSort"
           @select="onSelect"
+          @open="open"
           @menu-action="onMenuAction"
         />
       </TooltipProvider>
@@ -74,7 +77,7 @@ function mountNode(row: ComposerLayerRow) {
     app.unmount()
     host.remove()
   })
-  return { host, menuAction, select }
+  return { host, menuAction, open, select }
 }
 
 afterEach(() => {
@@ -82,6 +85,28 @@ afterEach(() => {
 })
 
 describe("StructureTreeNode action rail", () => {
+  it.each([
+    ["component", false],
+    ["layout", true],
+  ])("opens a %s when its label is double-clicked", (_label, pageLayout) => {
+    const row = layer({
+      kind: "component",
+      semanticType: "component",
+      label: pageLayout ? "BaseLayout" : "Hero",
+      sourceLabel: pageLayout ? "<BaseLayout>" : "<Hero>",
+      pageLayout,
+    })
+    const { host, open } = mountNode(row)
+    const label = [...host.querySelectorAll("span")].find(
+      (element) => element.textContent?.trim() === row.label,
+    )
+
+    label?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }))
+
+    expect(open).toHaveBeenCalledOnce()
+    expect(open).toHaveBeenCalledWith(row)
+  })
+
   it("groups Motion, translation, and CMS actions in their existing order", () => {
     const row = layer({
       hasMotion: true,

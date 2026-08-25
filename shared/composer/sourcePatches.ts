@@ -76,37 +76,22 @@ function replaceNode(
   before: EditableNode,
   after: EditableNode,
   source: string,
+  parentRange?: ComposerSourceRange,
 ): Replacement | null {
   const range = before.sourceRange;
   if (!range) return null;
+  if (
+    range.from < 0 || range.to < range.from || range.to > source.length ||
+    (parentRange && (range.from < parentRange.from || range.to > parentRange.to))
+  ) return null;
+  if (
+    before.kind === "expr" &&
+    source.slice(range.from, range.to) !== before.value
+  ) return null;
   return {
     from: range.from,
     to: range.to,
     insert: serializeReplacement(after, source),
-    nodeId: after.id,
-  };
-}
-
-function replaceRangelessExpressionWithText(
-  before: EditableNode,
-  after: EditableNode,
-  source: string,
-  parentRange: ComposerSourceRange | undefined,
-): Replacement | null {
-  if (
-    before.kind !== "expr" || after.kind !== "text" || !parentRange ||
-    !before.value.startsWith("{") || !before.value.endsWith("}")
-  ) return null;
-  const parentSource = source.slice(parentRange.from, parentRange.to);
-  const relativeFrom = parentSource.indexOf(before.value);
-  if (
-    relativeFrom < 0 ||
-    parentSource.indexOf(before.value, relativeFrom + before.value.length) >= 0
-  ) return null;
-  return {
-    from: parentRange.from + relativeFrom,
-    to: parentRange.from + relativeFrom + before.value.length,
-    insert: encodeAstroText(after.value),
     nodeId: after.id,
   };
 }
@@ -283,13 +268,7 @@ function collectNodeReplacements(
   parentRange?: ComposerSourceRange,
 ): boolean {
   if (before.id !== after.id || before.kind !== after.kind) {
-    const replacement = replaceNode(before, after, source)
-      ?? replaceRangelessExpressionWithText(
-        before,
-        after,
-        source,
-        parentRange,
-      );
+    const replacement = replaceNode(before, after, source, parentRange);
     if (!replacement) return false;
     replacements.push(replacement);
     return true;
@@ -302,7 +281,7 @@ function collectNodeReplacements(
         === JSON.stringify(directValueWithoutProps(after));
     const replacement = propsOnly
       ? replaceOpeningTag(before, after, source)
-      : replaceNode(before, after, source);
+      : replaceNode(before, after, source, parentRange);
     if (!replacement) return false;
     replacements.push(replacement);
     if (!propsOnly) return true;
@@ -311,7 +290,7 @@ function collectNodeReplacements(
   const beforeGroups = childGroups(before);
   const afterGroups = childGroups(after);
   if (beforeGroups.length !== afterGroups.length) {
-    const replacement = replaceNode(before, after, source);
+    const replacement = replaceNode(before, after, source, parentRange);
     if (!replacement) return false;
     replacements.push(replacement);
     return true;
@@ -320,7 +299,7 @@ function collectNodeReplacements(
     const beforeChildren = beforeGroups[group]!;
     const afterChildren = afterGroups[group]!;
     if (!sameNodeSequence(beforeChildren, afterChildren)) {
-      const replacement = replaceNode(before, after, source);
+      const replacement = replaceNode(before, after, source, parentRange);
       if (!replacement) return false;
       replacements.push(replacement);
       return true;

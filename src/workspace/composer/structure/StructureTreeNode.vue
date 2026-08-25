@@ -243,7 +243,7 @@ const canRename = computed(() =>
   !props.row.presentationOnly &&
   !props.row.sourceLocked &&
   props.row.deletable &&
-  props.row.kind === "element",
+  (props.row.kind === "element" || props.row.kind === "component"),
 )
 
 watch(isRenaming, async (active) => {
@@ -259,6 +259,14 @@ watch(isRenaming, async (active) => {
 
 function startRename() {
   if (canRename.value) emit("rename-start", props.row)
+}
+
+function handleLabelDoubleClick() {
+  if (!isActiveDocumentRoot.value && props.row.kind === "component") {
+    emit("open", props.row)
+    return
+  }
+  startRename()
 }
 
 function commitRename() {
@@ -471,7 +479,7 @@ function canHostChildren(): boolean {
                   isActiveDocumentRoot && 'font-semibold text-violet-900 hover:text-violet-950 dark:text-violet-200 dark:hover:text-violet-100',
                   isSelected && 'font-medium',
                 )"
-                @dblclick.stop="startRename"
+                @dblclick.stop="handleLabelDoubleClick"
               >
                 {{ row.label }}
               </span>

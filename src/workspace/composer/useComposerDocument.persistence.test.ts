@@ -62,6 +62,39 @@ describe("useComposerDocument persistence", () => {
     expect(commitComposerEditTransaction).not.toHaveBeenCalled()
   })
 
+  it("leaves the model and disk transaction untouched when an expression range is unsafe", async () => {
+    const source = `<main><h1>{heroCopy?.data?.["heading"]}</h1><p>Keep</p></main>`
+    const parsed = await parseAstro(source)
+    if (!parsed.editable) throw new Error(parsed.reason)
+    const expression = parsed.model.nodes[0]?.kind === "element"
+      && parsed.model.nodes[0].children?.[0]?.kind === "element"
+      ? parsed.model.nodes[0].children[0].children?.[0]
+      : null
+    if (!expression || expression.kind !== "expr" || !expression.sourceRange) {
+      throw new Error("expression missing")
+    }
+    expression.sourceRange.to += "</h1><p>".length
+    const model = ref<AstroDocumentModel | null>(parsed.model)
+    const beacon = createComposerBeacon()
+    beacon.illuminate("0.0.0")
+    const doc = useComposerDocument({
+      projectPath: ref("/tmp/project"),
+      editFile: ref<string | null>("src/pages/index.astro"),
+      editedMtimeMs: ref<number | null>(1000),
+      model,
+      editable: ref(true),
+      designActive: ref(true),
+      exactSource: ref<string | null>(source),
+      codeDirty: ref(false),
+      beacon,
+    })
+
+    expect(doc.setSelectedText('{heroCopy?.data?.["title"]}')).toBe(false)
+    expect(model.value).toEqual(parsed.model)
+    expect(doc.saveError.value).toBe("The changed node has no safe source range.")
+    expect(commitComposerEditTransaction).not.toHaveBeenCalled()
+  })
+
   it("persists repeated Props edits as an exact-source patch", async () => {
     const source = `---\nconst untouched =  true\n---\n<section   data-note='keep'>\n  <!-- preserve -->\n  <Card title="Builder" />\n</section>\n`
     const parsed = await parseAstro(source)

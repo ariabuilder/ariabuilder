@@ -71,7 +71,7 @@ describe("resolveCanvasTextTarget", () => {
     const document = model([{
       id: "heading", kind: "element", name: "h1", props: {}, children: [
         { id: "space", kind: "text", value: " " },
-        { id: "connected", kind: "expr", value: "{entry.data.title}", sourceRange: { start: 4, end: 22 } },
+        { id: "connected", kind: "expr", value: "{entry.data.title}", sourceRange: { from: 4, to: 22 } },
       ],
     }])
     expect(replaceConnectedTextWithStatic(document, "0.1", "Static title", "0")).toEqual({
@@ -82,7 +82,7 @@ describe("resolveCanvasTextTarget", () => {
       id: "connected",
       kind: "text",
       value: "Static title",
-      sourceRange: { start: 4, end: 22 },
+      sourceRange: { from: 4, to: 22 },
     })
   })
 

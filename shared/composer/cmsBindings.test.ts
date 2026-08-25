@@ -8,6 +8,7 @@ import {
   compileCmsBindingExpression,
   detectCmsContext,
   describeComposerCmsSelection,
+  resolveComposerTextTargetPath,
   resolveDirectCmsTextBinding,
   parseCmsContentExposure,
   pruneUnusedCmsArtifacts,
@@ -77,6 +78,17 @@ describe("Astro-native CMS bindings", () => {
     doc.nodes = [(await model(`<p>Static</p>`)).nodes[0]!];
     pruneUnusedCmsArtifacts(doc);
     expect(doc.extraFrontmatter).not.toContain("@aria-cms-lookup:authors");
+  });
+
+  it("preserves a user-owned getCollection import after managed artifacts are pruned", async () => {
+    const doc = await model(`---
+import { getCollection } from "astro:content";
+const posts = await getCollection("posts");
+---
+{posts.map((post) => <p>{post.data.title}</p>)}`);
+    pruneUnusedCmsArtifacts(doc);
+    expect(doc.extraFrontmatter).toContain('import { getCollection } from "astro:content";');
+    expect(doc.extraFrontmatter).toContain('await getCollection("posts")');
   });
 
   it("round-trips a related binding and cleans up its lookup after unbinding", async () => {
@@ -214,6 +226,61 @@ const heroCopy = (await getCollection("site-copy"))
       path: "1.2",
       field: "primaryActionLabel",
     });
+  });
+
+  it("resolves a managed text field through nested inline wrappers", async () => {
+    const doc = await model(`---
+import { getCollection } from "astro:content";
+/* @aria-cms-query:site-copy-cms-statement */
+const statement = (await getCollection("site-copy"))
+  .find((entry) => (entry.data.slug ?? entry.id) === "cms-statement");
+/* @aria-cms-query-end:site-copy-cms-statement */
+---
+<h2 class="statement__line">
+  <span class="text-reveal"><span class="text-reveal__line">
+    {statement?.data?.["heading"] ?? /* @aria-cms-fallback */ "A CMS built into the workspace."}
+  </span></span>
+</h2>`);
+    const targetPath = resolveComposerTextTargetPath(doc, "0");
+    expect(targetPath).toBe("0.1.0.1");
+    expect(resolveDirectCmsTextBinding(doc, "0")).toEqual({
+      path: targetPath,
+      collection: "site-copy",
+      entrySlug: "cms-statement",
+      contextVariable: "statement",
+      field: "heading",
+      contentExposure: "editable",
+    });
+    expect(describeComposerCmsSelection(doc, "0")).toMatchObject({
+      collection: "site-copy",
+      collections: ["site-copy"],
+      contextVariable: "statement",
+      contexts: ["statement"],
+      field: "heading",
+      bindingCount: 1,
+      ownership: "managed",
+      managedQueryId: "site-copy-cms-statement",
+      canBindText: true,
+      textTargetPath: targetPath,
+      summary: "Heading",
+    });
+  });
+
+  it("does not resolve ambiguous or block-level nested text targets", async () => {
+    const ambiguous = await model(
+      `<h2><span>{statement?.data?.["heading"]}</span><span>Fallback</span></h2>`,
+    );
+    expect(resolveComposerTextTargetPath(ambiguous, "0")).toBeNull();
+
+    const blockDescendant = await model(
+      `<div><h2>{statement?.data?.["heading"]}</h2></div>`,
+    );
+    expect(resolveComposerTextTargetPath(blockDescendant, "0")).toBeNull();
+
+    const componentBoundary = await model(
+      `<h2><TextReveal>{statement?.data?.["heading"]}</TextReveal></h2>`,
+    );
+    expect(resolveComposerTextTargetPath(componentBoundary, "0")).toBeNull();
   });
 
   it("restores an adopted project-data loop without removing the template", async () => {

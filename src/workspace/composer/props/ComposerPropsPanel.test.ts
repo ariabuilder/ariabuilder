@@ -15,11 +15,9 @@ import ComposerPropsPanel from "./ComposerPropsPanel.vue"
 const mocks = vi.hoisted(() => ({
   extractComposerPropSchema: vi.fn(),
 }))
-
 vi.mock("@/lib/composer", () => ({
   extractComposerPropSchema: mocks.extractComposerPropSchema,
 }))
-
 vi.mock("@/lib/workspace", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/workspace")>()),
   getCollections: vi.fn().mockResolvedValue({
@@ -32,7 +30,6 @@ vi.mock("@/lib/workspace", async (importOriginal) => ({
   }),
   listExternalEntries: vi.fn().mockResolvedValue({ items: [], fields: [] }),
 }))
-
 const mounted: Array<() => void> = []
 
 function deferred<T>() {
@@ -40,7 +37,6 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done })
   return { promise, resolve }
 }
-
 function mountPanel(options: {
   model?: AstroDocumentModel
   selectedPath?: string
@@ -96,7 +92,6 @@ afterEach(() => {
   mocks.extractComposerPropSchema.mockReset()
   for (const unmount of mounted.splice(0)) unmount()
 })
-
 function expandSection(host: HTMLElement, title: string) {
   const header = host.querySelector<HTMLElement>(`[data-inspector-section="${title}"]`)
   header?.click()
@@ -195,6 +190,55 @@ describe("ComposerPropsPanel prop schema lifecycle", () => {
     expect(host.textContent).toContain("Advanced source")
     expect(host.querySelector("textarea")?.textContent ?? "").not.toContain("posts.map")
     expect(host.querySelector("[data-content-binding-source]")?.getAttribute("data-content-binding-source")).toBe("cms")
+  })
+
+  it("infers the existing CMS binding through nested inline wrappers", async () => {
+    const { host } = mountPanel({
+      model: {
+        imports: [],
+        extraFrontmatter: `/* @aria-cms-query:site-copy-cms-statement */
+const statement = (await getCollection("site-copy"))
+  .find((entry) => (entry.data.slug ?? entry.id) === "cms-statement");
+/* @aria-cms-query-end:site-copy-cms-statement */`,
+        collectionBindings: {
+          statement: { collections: ["site-copy"], cardinality: "one" },
+        },
+        nodes: [{
+          id: "heading",
+          kind: "element",
+          name: "h2",
+          props: {},
+          children: [{
+            id: "reveal",
+            kind: "element",
+            name: "span",
+            props: {},
+            children: [{
+              id: "line",
+              kind: "element",
+              name: "span",
+              props: {},
+              children: [{
+                id: "copy",
+                kind: "expr",
+                value: '{statement?.data?.["heading"] ?? /* @aria-cms-fallback */ "A CMS built into the workspace."}',
+              }],
+            }],
+          }],
+        }],
+        propSchema: [],
+        slots: [],
+        extendsTag: null,
+      },
+      selectedPath: "0",
+    })
+    await nextTick()
+
+    expect(
+      host.querySelector("[data-content-binding-source]")
+        ?.getAttribute("data-content-binding-source"),
+    ).toBe("cms")
+    expect(host.textContent).not.toContain("This selection uses authored content")
   })
 
   it("infers project data for an existing local loop without expanding the section", async () => {
@@ -443,7 +487,6 @@ describe("ComposerPropsPanel prop schema lifecycle", () => {
       expect(field).not.toBeNull()
       return field!
     })
-
     input.focus()
     input.value = "r"
     input.dispatchEvent(new Event("input", { bubbles: true }))

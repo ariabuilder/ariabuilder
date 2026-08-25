@@ -180,6 +180,46 @@ describe("Composer design client computed styles", () => {
     dom.window.close()
   })
 
+  it("returns rendered image source and alt attributes for expression-bound Inspector fields", async () => {
+    const dom = new JSDOM(`<!doctype html><html><body>
+      <template data-aria-s="0"></template><img src="/uploads/hero.webp" alt="Aria Composer editing an Astro page"><template data-aria-e="0"></template>
+    </body></html>`, {
+      url: "http://127.0.0.1:4321/#aria-design",
+      runScripts: "dangerously",
+    })
+    const { window } = dom
+    const responses: Array<{ type?: string; requestId?: string; values?: Record<string, string> }> = []
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === ARIA_MSG.computedStyleResponse) responses.push(event.data)
+    })
+
+    window.eval(DESIGN_CLIENT_SOURCE)
+    window.document.dispatchEvent(new window.Event("DOMContentLoaded"))
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+    window.dispatchEvent(new window.MessageEvent("message", {
+      source: asMessageEventSource(window),
+      data: {
+        type: ARIA_MSG.computedStyleRequest,
+        requestId: "image-attributes-1",
+        path: "0",
+        occurrence: 0,
+        relativePath: "",
+        properties: ["aria-rendered-src", "aria-rendered-alt"],
+      },
+    }))
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+
+    expect(responses).toContainEqual({
+      type: ARIA_MSG.computedStyleResponse,
+      requestId: "image-attributes-1",
+      values: {
+        "aria-rendered-src": "http://127.0.0.1:4321/uploads/hero.webp",
+        "aria-rendered-alt": "Aria Composer editing an Astro page",
+      },
+    })
+    dom.window.close()
+  })
+
   it("resolves a gradient ancestor as the effective editing backdrop", async () => {
     const dom = new JSDOM(`<!doctype html><html><body style="background-color: rgb(255, 255, 255)">
       <section style="background: linear-gradient(135deg, #070b14 0%, #0b1020 52%, #101a35 100%)">

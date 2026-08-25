@@ -64,6 +64,43 @@ describe("inferComposerContentBindingSource", () => {
     expect(inferComposerContentBindingSource(doc, "0.0")).toBe("cms")
   })
 
+  it("opens Aria CMS for a managed field inside nested inline wrappers", () => {
+    const doc = model({
+      extraFrontmatter: `/* @aria-cms-query:site-copy-cms-statement */
+const statement = (await getCollection("site-copy"))
+  .find((entry) => (entry.data.slug ?? entry.id) === "cms-statement");
+/* @aria-cms-query-end:site-copy-cms-statement */`,
+      collectionBindings: {
+        statement: { collections: ["site-copy"], cardinality: "one" },
+      },
+      nodes: [{
+        id: "heading",
+        kind: "element",
+        name: "h2",
+        props: {},
+        children: [{
+          id: "reveal",
+          kind: "element",
+          name: "span",
+          props: { class: { type: "string", value: "text-reveal" } },
+          children: [{
+            id: "line",
+            kind: "element",
+            name: "span",
+            props: { class: { type: "string", value: "text-reveal__line" } },
+            children: [{
+              id: "copy",
+              kind: "expr",
+              value: '{statement?.data?.["heading"] ?? /* @aria-cms-fallback */ "A CMS built into the workspace."}',
+            }],
+          }],
+        }],
+      }],
+    })
+
+    expect(inferComposerContentBindingSource(doc, "0")).toBe("cms")
+  })
+
   it("opens project translations when a managed translation fallback is present", () => {
     const doc = model({
       nodes: [{

@@ -47,7 +47,15 @@ function documentFor(nodes: ElementNode[]): AstroDocumentModel {
 function mountMedia(
   model: Ref<AstroDocumentModel | null>,
   projectPath = "",
-  options: { node?: ElementNode; targetPath?: string; selectedPath?: string } = {},
+  options: {
+    node?: ElementNode
+    targetPath?: string
+    selectedPath?: string
+    computedStyle?: (payload: {
+      path: string
+      properties: string[]
+    }) => Promise<Record<string, string>>
+  } = {},
 ) {
   const host = document.createElement("div")
   document.body.append(host)
@@ -82,6 +90,7 @@ function mountMedia(
         editable: ref(true), designActive: ref(true), projectPath: ref(projectPath), editFile: ref("src/pages/index.astro"),
         availableLayouts: ref([]), pages: ref([]), documentKind: ref("page"),
         commitInspectorMutation: commit,
+        computedStyle: options.computedStyle ?? vi.fn(async () => ({})),
       } as unknown as ComposerDocumentSession)
       return () => h(InspectorHost)
     },
@@ -151,6 +160,46 @@ describe("ComposerMediaSection", () => {
     expect(host.querySelector('[data-source-mode="media"]')?.getAttribute("aria-checked")).toBe("true")
   })
 
+  it("shows rendered CMS image and alt values without detaching their expressions", async () => {
+    mocks.getPlayableMediaUrl.mockResolvedValue({
+      url: "aria-media://asset/project/public-aria-composer-01.png",
+      mimeType: "image/png",
+    })
+    const node = image("cms-image")
+    node.props.src = { type: "expr", value: 'heroCopy?.data?.["image"]' }
+    node.props.alt = {
+      type: "expr",
+      value: 'heroCopy?.data?.["imageAlt"] ?? /* @aria-cms-fallback */ "Aria Composer"',
+    }
+    const computedStyle = vi.fn(async () => ({
+      "aria-rendered-src": "http://127.0.0.1:4321/aria/Composer-01.png",
+      "aria-rendered-alt": "Aria Composer editing an Astro page",
+    }))
+    const model = ref<AstroDocumentModel | null>(documentFor([node]))
+    const { host } = mountMedia(model, "/Projects/Site", { computedStyle })
+    await vi.waitFor(() => {
+      expect(computedStyle).toHaveBeenCalledWith({
+        path: "0",
+        properties: ["aria-rendered-src", "aria-rendered-alt"],
+      })
+      expect(mocks.getPlayableMediaUrl).toHaveBeenCalledWith(
+        "/Projects/Site",
+        "public/aria/Composer-01.png",
+      )
+      expect(host.querySelector<HTMLImageElement>('img')?.src).toBe(
+        "aria-media://asset/project/public-aria-composer-01.png",
+      )
+      const altInput = [...host.querySelectorAll<HTMLInputElement>("input")]
+        .find((input) => input.value === "Aria Composer editing an Astro page")
+      expect(altInput?.disabled).toBe(true)
+    })
+    expect(node.props.src).toMatchObject({
+      type: "expr",
+      value: 'heroCopy?.data?.["image"]',
+    })
+    expect(node.props.alt).toMatchObject({ type: "expr" })
+    expect(host.querySelector<HTMLImageElement>('img')?.alt).toBe("")
+  })
   it("commits source dimensions atomically and ignores stale metadata after selection changes", async () => {
     let resolveState!: (value: { variants: []; profile: { currentSourceVersion: string; altText: string } }) => void
     mocks.getMediaTransformState.mockReturnValue(new Promise((resolve) => { resolveState = resolve }))
@@ -398,7 +447,6 @@ describe("ComposerMediaSection", () => {
     expect(trigger?.textContent).toContain("Choose media")
     expect([...host.querySelectorAll("button")].some((button) => button.textContent === "Choose media" && button !== trigger)).toBe(false)
   })
-
   it("keeps a URL preview from opening the media library", async () => {
     const model = ref<AstroDocumentModel | null>(documentFor([image("remote", "https://cdn.example.com/hero.webp")]))
     const { host } = mountMedia(model)

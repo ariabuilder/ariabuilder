@@ -474,8 +474,10 @@ watch(open, async (next) => {
         variant="ghost"
         size="icon-sm"
         class="h-6! w-6! shrink-0"
+        :class="active ? 'border border-primary/45 bg-primary/10 text-primary' : ''"
         :aria-label="label"
         :title="label"
+        :aria-pressed="Boolean(active)"
         :data-binding-active="active || undefined"
       >
         <AppIcon :name="icon" :size="14" aria-hidden="true" />

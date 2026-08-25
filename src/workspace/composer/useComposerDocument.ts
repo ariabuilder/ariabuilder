@@ -119,6 +119,7 @@ function sameSelectionPaths(
 type HistoryEntry = {
   kind: "model"
   model: AstroDocumentModel
+  source: string | null
   selectedPath: string | null
   selections: import("../../../shared/composer/selection").SelectionRef[]
   stylesheets: ComposerStylesheetSnapshot[]
@@ -464,6 +465,10 @@ export function useComposerDocument(options: {
     return {
       kind: "model",
       model: cloneComposerValue(model),
+      source: options.stagedSource?.value
+        ?? pendingSource
+        ?? options.exactSource?.value
+        ?? null,
       selectedPath: options.beacon.selectedPath.value,
       selections: cloneSelections(options.beacon.selections.value),
       stylesheets: cloneComposerValue([...stylesheetState.values()]),
@@ -2369,17 +2374,12 @@ export function useComposerDocument(options: {
     if (!file || !options.model.value || saveConflict.value) return false
     if (options.stagedSource?.value != null) {
       const targetModel = cloneComposerValue(entry.model)
-      const patched = patchComposerModelSource(
-        options.stagedSource.value,
-        options.model.value,
-        targetModel,
-      )
-      if (!patched.ok) {
-        saveError.value = patched.reason
+      if (entry.source == null) {
+        saveError.value = "The exact Astro source is unavailable. Reload before restoring history."
         return false
       }
-      options.onStagedSourceChange?.(patched.source)
-      applySnapshotLocally({ ...entry, model: targetModel }, patched.source)
+      options.onStagedSourceChange?.(entry.source)
+      applySnapshotLocally({ ...entry, model: targetModel }, entry.source)
       dirty.value = true
       return true
     }
@@ -2389,13 +2389,15 @@ export function useComposerDocument(options: {
       saveError.value = "The exact Astro source is unavailable. Reload before restoring history."
       return false
     }
-    const patched = sourceBefore == null
-      ? null
-      : patchComposerModelSource(
-          sourceBefore,
-          options.model.value,
-          targetModel,
-        )
+    const patched = entry.source != null
+      ? { ok: true as const, source: entry.source }
+      : sourceBefore == null
+        ? null
+        : patchComposerModelSource(
+            sourceBefore,
+            options.model.value,
+            targetModel,
+          )
     if (patched && !patched.ok) {
       saveError.value = patched.reason
       return false

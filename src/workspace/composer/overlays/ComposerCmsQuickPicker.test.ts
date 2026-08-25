@@ -145,10 +145,11 @@ describe("ComposerCmsQuickPicker", () => {
 
     expect(trigger.className).toContain("h-6!")
     expect(trigger.className).toContain("w-6!")
-    expect(trigger.className).not.toContain("border-primary/45")
-    expect(trigger.className).not.toContain("bg-primary/10")
-    expect(trigger.className).not.toContain("text-primary")
+    expect(trigger.className).toContain("border-primary/45")
+    expect(trigger.className).toContain("bg-primary/10")
+    expect(trigger.className).toContain("text-primary")
     expect(trigger.hasAttribute("data-binding-active")).toBe(true)
+    expect(trigger.getAttribute("aria-pressed")).toBe("true")
 
     trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }))
     click(trigger)

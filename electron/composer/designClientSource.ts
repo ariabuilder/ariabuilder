@@ -2169,7 +2169,13 @@ ${MORPHDOM_SOURCE}
             ? effectiveBackground(target)
             : property === "aria-effective-background-color"
               ? effectiveBackgroundColor(target)
-              : style.getPropertyValue(property).trim();
+              : property === "aria-rendered-src"
+                ? (target.tagName === "IMG"
+                    ? (target.currentSrc || target.src || "")
+                    : (target.getAttribute("src") || ""))
+                : property === "aria-rendered-alt"
+                  ? (target.getAttribute("alt") || "")
+                  : style.getPropertyValue(property).trim();
         }
       }
     }

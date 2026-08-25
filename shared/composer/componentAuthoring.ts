@@ -46,6 +46,8 @@ export type ComposerCmsPreviewEntry = {
   status?: string;
   locale?: string;
   route: string;
+  /** Changes whenever the entry content used by previews changes. */
+  version?: string;
 };
 
 export type ComposerCmsEntryTemplatePreviewContext = {
