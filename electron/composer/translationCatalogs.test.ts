@@ -76,8 +76,14 @@ describe("project translation catalog discovery", () => {
     write(root, "src/locales/en-ca.json", JSON.stringify({ hero: { title: "Hello" } }));
     write(root, "src/locales/fr-ca.json", JSON.stringify({ hero: { title: "Bonjour" } }));
     write(root, "src/locales/catalog.ts", `import en from "./en-ca.json";\nimport fr from "./fr-ca.json";\nexport const messages = { "en-ca": en, "fr-ca": fr };\nexport const runtimeMessages = makeMessages();\n`);
+    write(root, ".aria/site-settings.json", JSON.stringify({
+      localization: { content: { defaultLocale: " en-ca " } },
+    }));
     const discovered = await listProjectTranslationCatalogs(root);
-    expect(discovered.catalogs.find((catalog) => catalog.exportName === "messages")?.locales).toEqual(["en-CA", "fr-CA"]);
+    expect(discovered.catalogs.find((catalog) => catalog.exportName === "messages")).toMatchObject({
+      locales: ["en-CA", "fr-CA"],
+      defaultLocale: "en-CA",
+    });
     expect(discovered.unsupported).toContainEqual(expect.objectContaining({ exportName: "runtimeMessages", reason: expect.stringContaining("Computed value") }));
   });
 

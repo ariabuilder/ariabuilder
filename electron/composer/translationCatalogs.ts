@@ -22,15 +22,17 @@ import type {
   ProjectTranslationScalar,
   TranslationCoverageIssue,
 } from "../../shared/composer/projectTranslations";
-import { readCollections } from "../collections";
-import { createEntry, updateEntry, writeCollectionsWithContentConfig } from "../cms";
 import { canonicalDirectory, resolveWithinRoot, writeTextFileAtomic } from "../pathSafety";
-import { readSiteSettings } from "../siteSettings";
 import { fallbackChain } from "../../shared/localization";
 import { markSelfWrite } from "./selfWrite";
+import {
+  TranslationCatalogWorkerRegistry,
+  type TranslationCatalogWorker,
+} from "./translationCatalogWorkerLifecycle";
 
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
 const MAX_SOURCE_FILES = 2_000;
+const TRANSLATION_WORKER_TIMEOUT_MS = 60_000;
 const CANDIDATE_NAME = /(?:^|[/_.-])(i18n|l10n|locale|locales|messages?|translations?)(?:[/_.-]|$)/i;
 const SCALAR_KINDS = new Set(["string", "number", "boolean"]);
 
@@ -64,6 +66,7 @@ type CachedRegistry = {
 
 const registryCache = new Map<string, CachedRegistry>();
 const registryGeneration = new Map<string, number>();
+const translationWorkers = new TranslationCatalogWorkerRegistry();
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -103,6 +106,20 @@ function canonicalLocale(value: string): string | null {
     return Intl.getCanonicalLocales(value)[0] ?? null;
   } catch {
     return null;
+  }
+}
+
+function configuredDefaultLocale(root: string): string | undefined {
+  try {
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(root, ".aria", "site-settings.json"), "utf8"),
+    ) as { localization?: { content?: { defaultLocale?: unknown } } };
+    const locale = settings.localization?.content?.defaultLocale;
+    return typeof locale === "string" && locale.trim()
+      ? canonicalLocale(locale.trim()) ?? undefined
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -473,7 +490,7 @@ function buildCatalog(
       .map((raw) => [canonicalLocale(raw), raw] as const)
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0])),
   );
-  const settingsDefault = readSiteSettings(root).localization?.content.defaultLocale;
+  const settingsDefault = configuredDefaultLocale(root);
   const defaultLocale = settingsDefault && localeCodes.includes(settingsDefault) ? settingsDefault : localeCodes[0]!;
   const namespaceNames = [...new Set(locales.flatMap(([, value]) => Object.keys(value)))];
   const diagnostics: TranslationCoverageIssue[] = [];
@@ -590,42 +607,35 @@ export async function discoverProjectTranslationCatalogsInProcess(root: string):
   return { catalogs: unique, unsupported, scannedAt: new Date().toISOString() };
 }
 
-type TranslationWorkerResponse =
-  | { ok: true; result: ProjectTranslationCatalogResult }
-  | { ok: false; error: string };
-
 async function discover(root: string): Promise<ProjectTranslationCatalogResult> {
   if (!process.versions.electron || process.env.VITEST) {
     return discoverProjectTranslationCatalogsInProcess(root);
   }
-  return new Promise((resolve, reject) => {
-    const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
-    const electronOutputDirectory = path.basename(moduleDirectory) === "chunks"
-      ? path.dirname(moduleDirectory)
-      : moduleDirectory;
-    const worker = new Worker(
-      path.join(electronOutputDirectory, "translation-catalog-worker.mjs"),
-      { workerData: { root } },
-    );
-    worker.once("message", (message: TranslationWorkerResponse) => {
-      if (message.ok) resolve(message.result);
-      else reject(new Error(message.error));
-    });
-    worker.once("error", reject);
-    worker.once("exit", (code) => {
-      if (code !== 0) reject(new Error(`Translation discovery worker stopped with code ${code}.`));
-    });
-  });
+  const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+  const electronOutputDirectory = path.basename(moduleDirectory) === "chunks"
+    ? path.dirname(moduleDirectory)
+    : moduleDirectory;
+  const worker = new Worker(
+    path.join(electronOutputDirectory, "translation-catalog-worker.mjs"),
+    { workerData: { root } },
+  );
+  return translationWorkers.run(
+    root,
+    worker as unknown as TranslationCatalogWorker,
+    TRANSLATION_WORKER_TIMEOUT_MS,
+  );
 }
 
 export function invalidateTranslationCatalogRegistry(projectPath: string): void {
   const root = canonicalDirectory(projectPath);
+  translationWorkers.cancel(root);
   registryGeneration.set(root, (registryGeneration.get(root) ?? 0) + 1);
   registryCache.delete(root);
 }
 
 export function disposeTranslationCatalogRegistry(projectPath: string): void {
   const root = canonicalDirectory(projectPath);
+  translationWorkers.cancel(root);
   registryCache.delete(root);
   registryGeneration.delete(root);
 }
@@ -714,6 +724,10 @@ function inferFields(values: Record<string, unknown>[], prefix = ""): FieldSchem
 }
 
 export async function assessProjectTranslationAdoption(projectPath: string, input: ProjectTranslationAdoptionInput): Promise<ProjectTranslationAdoptionAssessment> {
+  const [{ readCollections }, { readSiteSettings }] = await Promise.all([
+    import("../collections"),
+    import("../siteSettings"),
+  ]);
   const root = canonicalDirectory(projectPath);
   const result = await listProjectTranslationCatalogs(root);
   const catalog = result.catalogs.find((item) => item.id === input.catalogId);
@@ -746,6 +760,10 @@ export async function assessProjectTranslationAdoption(projectPath: string, inpu
 }
 
 export async function createProjectTranslationDrafts(projectPath: string, input: ProjectTranslationAdoptionInput & { expectedPreviewHash: string }): Promise<ProjectTranslationAdoptionResult> {
+  const [{ readCollections }, { createEntry, updateEntry, writeCollectionsWithContentConfig }] = await Promise.all([
+    import("../collections"),
+    import("../cms"),
+  ]);
   const root = canonicalDirectory(projectPath);
   const assessment = await assessProjectTranslationAdoption(root, input);
   if (assessment.previewHash !== input.expectedPreviewHash) throw new Error("TRANSLATION_CATALOG_CONFLICT: The adoption review is stale.");
@@ -853,6 +871,7 @@ export async function applyProjectTranslationCutover(
   projectPath: string,
   input: ProjectTranslationCutoverInput,
 ): Promise<ProjectTranslationCutoverResult> {
+  const { readSiteSettings } = await import("../siteSettings");
   const root = canonicalDirectory(projectPath);
   const assessment = await assessProjectTranslationAdoption(root, input);
   if (assessment.previewHash !== input.expectedPreviewHash) throw new Error("TRANSLATION_CATALOG_CONFLICT: The cutover review is stale.");

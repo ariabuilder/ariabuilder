@@ -483,6 +483,7 @@ function refreshStaleAriaBemPrimitives(root: string): void {
 }
 
 export function getDesignSnapshot(projectPath: string): DesignSnapshot {
+  const startedAt = Date.now();
   const root = canonicalDirectory(projectPath);
   refreshStaleAriaBemPrimitives(root);
   const stylesheets = listProjectStylesheets(root);
@@ -609,10 +610,14 @@ export function getDesignSnapshot(projectPath: string): DesignSnapshot {
     icons: { enabledPacks: [...meta.enabledIconPacks] },
     meta,
   };
-  return {
+  const snapshot = {
     revision: hashRevision(snapshotBase, "d"),
     ...snapshotBase,
   };
+  console.info(
+    `[aria:perf] Design discovery completed in ${Date.now() - startedAt}ms across ${stylesheets.length} stylesheets.`,
+  );
+  return snapshot;
 }
 
 export function ensureDesignEntry(projectPath: string): {

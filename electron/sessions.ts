@@ -27,6 +27,10 @@ import {
   recoverProjectMutations,
 } from "./mutations";
 import { drainCmsTransactions } from "./cms/mutationCoordinator";
+import {
+  disposeProjectSearch,
+  invalidateProjectSearch,
+} from "./search";
 
 export type { ProjectRuntimeSession } from "../shared/types";
 
@@ -200,6 +204,7 @@ async function openSessionInternal(key: string): Promise<ProjectRuntimeSession> 
   };
   sessions.set(key, record);
   const watcher = new ProjectWatcher(key, (change) => {
+    invalidateProjectSearch(key, change);
     if (isTranslationRegistryChange(change.path)) {
       invalidateTranslationCatalogRegistry(key);
     }
@@ -276,6 +281,7 @@ export async function closeSession(
   }
   const close = (async () => {
     disposeTranslationCatalogRegistry(key);
+    disposeProjectSearch(key);
     watchers.get(key)?.stop();
     watchers.delete(key);
     await Promise.all([
@@ -420,6 +426,10 @@ export async function installSessionDeps(projectPath: string): Promise<ProjectRu
 export async function stopAllSessions(): Promise<void> {
   await Promise.all([...opening.values()].map((pending) => pending.catch(() => undefined)));
   await cancelAllInstalls();
+  for (const key of sessions.keys()) {
+    disposeTranslationCatalogRegistry(key);
+    disposeProjectSearch(key);
+  }
   for (const watcher of watchers.values()) watcher.stop();
   watchers.clear();
   await runtime.stopAll();
