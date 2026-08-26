@@ -19,6 +19,11 @@ import {
   invalidateTranslationCatalogRegistry,
   isTranslationRegistryChange,
 } from "./composer/translationCatalogs";
+import {
+  disposeProjectDataCatalogRegistry,
+  invalidateProjectDataCatalogRegistry,
+  isProjectDataRegistryChange,
+} from "./composer/projectDataCatalog";
 import { isAstroProject } from "./project";
 import type { ProjectRuntimeSession } from "../shared/types";
 import { recoverCmsTransactions } from "./cms";
@@ -208,6 +213,9 @@ async function openSessionInternal(key: string): Promise<ProjectRuntimeSession> 
     if (isTranslationRegistryChange(change.path)) {
       invalidateTranslationCatalogRegistry(key);
     }
+    if (isProjectDataRegistryChange(change.path)) {
+      invalidateProjectDataCatalogRegistry(key);
+    }
     if (!change.path || change.path.endsWith(".astro")) {
       try {
         syncMotionArtifacts(key);
@@ -282,6 +290,7 @@ export async function closeSession(
   const close = (async () => {
     disposeTranslationCatalogRegistry(key);
     disposeProjectSearch(key);
+    disposeProjectDataCatalogRegistry(key);
     watchers.get(key)?.stop();
     watchers.delete(key);
     await Promise.all([

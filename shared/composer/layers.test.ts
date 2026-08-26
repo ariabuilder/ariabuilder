@@ -16,16 +16,52 @@ async function modelFor(source: string) {
 }
 
 describe("Composer Layers projection", () => {
-  it("prefers a persisted custom layer label without changing its source label", async () => {
-    const tree = buildComposerLayerTree(
-      await modelFor('<section data-aria-layer-label="Campaign hero"><h1>Welcome</h1></section>'),
-    );
+  it("keeps semantic element names when their text comes from CMS", async () => {
+    const tree = buildComposerLayerTree(await modelFor(`---
+import { getCollection } from "astro:content";
+/* @aria-cms-query:hero-copy */
+const heroCopy = (await getCollection("site-copy"))
+  .find((entry) => (entry.data.slug ?? entry.id) === "hero");
+/* @aria-cms-query-end:hero-copy */
+---
+<section>
+  <p class="badge"><span class="badge__dot" />{heroCopy?.data?.["eyebrow"] ?? /* @aria-cms-fallback */ "Fallback"}</p>
+  <h1>{heroCopy?.data?.["heading"] ?? /* @aria-cms-fallback */ "Fallback"}</h1>
+  <p>
+    {heroCopy?.data?.["description"] ?? /* @aria-cms-fallback */ "Fallback"}
+  </p>
+  <a href="/"><Icon />{heroCopy?.data?.["primaryActionLabel"] ?? /* @aria-cms-fallback */ "Download"}</a>
+</section>`));
+    expect(tree.content[0]?.children).toMatchObject([
+      { label: "Text", semanticType: "text", hasCmsBinding: true },
+      { label: "Heading", semanticType: "heading", hasCmsBinding: true },
+      { label: "Text", semanticType: "text", hasCmsBinding: true },
+      { label: "Link", semanticType: "link", hasCmsBinding: true },
+    ]);
+  });
+
+  it("keeps a nested StatementBanner CMS heading semantic in Layers", async () => {
+    const tree = buildComposerLayerTree(await modelFor(`---
+import { getCollection } from "astro:content";
+/* @aria-cms-query:site-copy-cms-statement */
+const statement = (await getCollection("site-copy"))
+  .find((entry) => (entry.data.slug ?? entry.id) === "cms-statement");
+/* @aria-cms-query-end:site-copy-cms-statement */
+---
+<h2 class="statement__line">
+  <span class="text-reveal"><span class="text-reveal__line">
+    {statement?.data?.["heading"] ?? /* @aria-cms-fallback */ "A CMS built into the workspace."}
+  </span></span>
+</h2>`));
     expect(tree.content[0]).toMatchObject({
-      label: "Campaign hero",
-      sourceLabel: "<section>",
-      semanticType: "section",
+      label: "Heading",
+      semanticType: "heading",
+      hasCmsBinding: true,
+      cmsCollections: ["site-copy"],
+      cmsBindingCount: 1,
     });
-    expect(tree.content[0]?.searchText).toContain("campaign hero");
+    expect(tree.content[0]?.label).not.toContain("statement?.data");
+    expect(tree.content[0]?.searchText).not.toContain("statement?.data");
   });
 
   it("uses ephemeral project-data analysis for a meaningful loop label", async () => {

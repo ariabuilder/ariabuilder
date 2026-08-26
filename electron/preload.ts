@@ -727,7 +727,12 @@ export type AriaThumbsApi = {
   warmPages: (opts: {
     projectPath: string;
     baseUrl: string;
-    pages: Array<{ route: string; mtimeMs?: number | null }>;
+    pages: Array<{
+      route: string;
+      previewRoute?: string | null;
+      cacheKey?: string | null;
+      mtimeMs?: number | null;
+    }>;
   }) => Promise<WarmPagesResult>;
   warmComponents: (opts: {
     projectPath: string;
@@ -741,7 +746,12 @@ export type AriaThumbsApi = {
   warmLayouts: (opts: {
     projectPath: string;
     baseUrl: string;
-    pages: Array<{ route: string; mtimeMs?: number | null }>;
+    pages: Array<{
+      route: string;
+      previewRoute?: string | null;
+      cacheKey?: string | null;
+      mtimeMs?: number | null;
+    }>;
     layouts: Array<{ id: string; mtimeMs?: number | null }>;
   }) => Promise<WarmPagesResult>;
   cancelWarm: () => Promise<{ ok: true }>;
@@ -905,6 +915,14 @@ export type AriaComposerApi = {
     projectPath: string,
     input: import("../shared/composer").ComposerDataInspectionInput,
   ) => Promise<import("../shared/composer").ComposerDataInspectionResult>;
+  listProjectData: (
+    projectPath: string,
+    input: import("../shared/composer").ProjectDataCatalogInput,
+  ) => Promise<import("../shared/composer").ProjectDataCatalogResult>;
+  editProjectDataCatalogValue: (
+    projectPath: string,
+    input: import("../shared/composer").ProjectDataCatalogEditInput,
+  ) => Promise<import("../shared/composer").ProjectDataCatalogEditResult>;
   assessProjectDataAdoption: (
     projectPath: string,
     input: import("../shared/composer").ProjectDataAdoptionInput,
@@ -1423,6 +1441,10 @@ const aria: AriaApi = {
       ipcRenderer.invoke("composer:apply_translation_cutover", projectPath, input),
     inspectProjectData: (projectPath, input) =>
       ipcRenderer.invoke("composer:inspect_project_data", projectPath, input),
+    listProjectData: (projectPath, input) =>
+      ipcRenderer.invoke("composer:list_project_data", projectPath, input),
+    editProjectDataCatalogValue: (projectPath, input) =>
+      ipcRenderer.invoke("composer:edit_project_data_catalog_value", projectPath, input),
     assessProjectDataAdoption: (projectPath, input) =>
       ipcRenderer.invoke("composer:assess_project_data_adoption", projectPath, input),
     editProjectData: (projectPath, input) =>

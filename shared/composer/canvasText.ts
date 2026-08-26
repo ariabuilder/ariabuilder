@@ -1,0 +1,194 @@
+import { describeComposerCmsSelection, parseCmsContentExposure } from "./cmsBindings";
+import type { ComposerCmsEntryTemplatePreviewContext } from "./componentAuthoring";
+import { locateAtPath } from "./mutate";
+import { nodeAtMarkerPath } from "./paths";
+import type { AstroDocumentModel, EditableNode } from "./types";
+
+export type CanvasTextPatchOrigin = {
+  sessionId: string;
+  path: string;
+  occurrence: number;
+  sequence: number;
+};
+
+export type CanvasTextTarget =
+  | { kind: "static"; path: string; visibleOwnerPath: string; value: string }
+  | {
+      kind: "cms"; path: string; visibleOwnerPath: string; value: string;
+      collection: string | null; contextVariable: string; field: string;
+      contentExposure: "editable" | "locked" | "hidden";
+    }
+  | {
+      kind: "translation"; path: string; visibleOwnerPath: string; value: string;
+      namespace: string; keyPath: string[];
+    }
+  | {
+      kind: "detach-required"; path: string; visibleOwnerPath: string;
+      value: string; reason: string;
+    };
+
+export type CanvasTextSessionState = {
+  sessionId: string;
+  sourcePath: string;
+  visibleOwnerPath: string;
+  originalValue: string;
+  draft: string;
+  occurrence: number;
+  target: CanvasTextTarget;
+  owner?:
+    | {
+        kind: "cms";
+        collectionId: string;
+        collectionName: string;
+        field: string;
+        locale: string;
+      }
+    | {
+        kind: "translation";
+        catalogId: string;
+        namespace: string;
+        keyPath: string[];
+        locale: string;
+      };
+};
+
+type CmsTextOwnerCandidate = Pick<
+  Extract<CanvasTextTarget, { kind: "cms" }>,
+  "collection" | "contextVariable" | "field" | "contentExposure"
+>;
+
+/** Keep canvas and Inspector CMS writes behind the same exact-owner gate. */
+export function isWritableCmsTextOwner(
+  model: AstroDocumentModel,
+  target: CmsTextOwnerCandidate,
+  context: ComposerCmsEntryTemplatePreviewContext | null | undefined,
+): boolean {
+  const ownerBinding = model.collectionBindings?.[target.contextVariable];
+  return Boolean(
+    target.collection && target.collection === context?.collectionName &&
+    ownerBinding?.cardinality === "one" &&
+    ownerBinding.collections.length === 1 &&
+    ownerBinding.collections[0] === context?.collectionName &&
+    target.contentExposure === "editable" &&
+    context?.sourceKind === "aria-managed" && context.writable &&
+    context.selectedEntryId &&
+    context.writableTextFields?.includes(target.field),
+  );
+}
+
+/** Replace one connected expression with literal Astro text after confirmation. */
+export function replaceConnectedTextWithStatic(
+  model: AstroDocumentModel,
+  path: string,
+  value: string,
+  selectPath = path,
+) {
+  const location = locateAtPath(model.nodes, path);
+  if (!location || location.node.kind !== "expr") {
+    return { ok: false as const, selectPath, reason: "The connected text is no longer available." };
+  }
+  location.list[location.index] = {
+    id: location.node.id,
+    kind: "text",
+    value,
+    ...(location.node.sourceRange ? { sourceRange: location.node.sourceRange } : {}),
+  };
+  return { ok: true as const, selectPath };
+}
+
+function singleTextChild(node: EditableNode | null, path: string) {
+  if (!node) return null;
+  if (node.kind === "text" || node.kind === "expr") return { node, path };
+  if (
+    (node.kind === "element" || node.kind === "component" ||
+      node.kind === "fragment" || node.kind === "slot") &&
+    node.children?.length === 1
+  ) {
+    const child = node.children[0]!;
+    if (child.kind === "text" || child.kind === "expr") {
+      return { node: child, path: `${path}.0` };
+    }
+  }
+  return null;
+}
+
+function translationExpression(value: string) {
+  const source = value.replace(/^\{\s*|\s*\}$/g, "");
+  const fallbackIndex = source.indexOf("/* @aria-translation-fallback */");
+  const access = (fallbackIndex >= 0 ? source.slice(0, fallbackIndex) : source)
+    .replace(/\?\?/g, " ").trim();
+  const namespace = /^([A-Za-z_$][\w$]*)/.exec(access)?.[1];
+  if (!namespace) return null;
+  const keyPath: string[] = [];
+  const segment = /\?\.([A-Za-z_$][\w$]*)|\?\.\[\s*["']([^"']+)["']\s*\]|\[\s*["']([^"']+)["']\s*\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = segment.exec(access))) keyPath.push(match[1] ?? match[2] ?? match[3]!);
+  return keyPath.length ? { namespace, keyPath } : null;
+}
+
+/** Resolve only lossless plain-text hosts. Mixed rich text is Inspector-only. */
+export function resolveCanvasTextTarget(
+  model: AstroDocumentModel,
+  selectedPath: string,
+  renderedValue = "",
+): CanvasTextTarget | null {
+  const resolved = singleTextChild(nodeAtMarkerPath(model.nodes, selectedPath), selectedPath);
+  if (!resolved) return null;
+  const { node, path } = resolved;
+  if (node.kind === "text") {
+    return { kind: "static", path, visibleOwnerPath: selectedPath, value: node.value };
+  }
+  const cms = describeComposerCmsSelection(model, path);
+  if (cms.contextVariable && cms.field) {
+    return {
+      kind: "cms", path, visibleOwnerPath: selectedPath, value: renderedValue,
+      collection: cms.collection, contextVariable: cms.contextVariable, field: cms.field,
+      contentExposure: parseCmsContentExposure(node.value),
+    };
+  }
+  const translation = translationExpression(node.value);
+  if (translation) {
+    return { kind: "translation", path, visibleOwnerPath: selectedPath, value: renderedValue, ...translation };
+  }
+  return {
+    kind: "detach-required", path, visibleOwnerPath: selectedPath,
+    value: renderedValue, reason: "This text is generated by an Astro expression.",
+  };
+}
+
+/** Other source paths in the open document that render the same bound expression. */
+export function canvasTextMirrorPaths(
+  model: AstroDocumentModel,
+  target: CanvasTextTarget,
+): string[] {
+  if (target.kind !== "cms" && target.kind !== "translation") return [target.path];
+  const paths: string[] = [];
+  const visit = (nodes: EditableNode[], parent = "") => {
+    nodes.forEach((node, index) => {
+      const path = parent ? `${parent}.${index}` : String(index);
+      if (node.kind === "expr") {
+        const candidate = resolveCanvasTextTarget(model, path);
+        const sameOwner = target.kind === "cms" && candidate?.kind === "cms"
+          ? candidate.collection === target.collection &&
+            candidate.contextVariable === target.contextVariable &&
+            candidate.field === target.field
+          : target.kind === "translation" && candidate?.kind === "translation"
+            ? candidate.namespace === target.namespace &&
+              candidate.keyPath.join(".") === target.keyPath.join(".")
+            : false;
+        if (sameOwner) paths.push(path);
+      }
+      if (node.kind === "conditional") {
+        visit(node.consequent, `${path}.t`);
+        visit(node.alternate ?? [], `${path}.f`);
+      } else if (
+        node.kind === "element" || node.kind === "component" ||
+        node.kind === "fragment" || node.kind === "slot" || node.kind === "map"
+      ) {
+        visit(node.children ?? [], path);
+      }
+    });
+  };
+  visit(model.nodes);
+  return paths.length ? paths : [target.path];
+}

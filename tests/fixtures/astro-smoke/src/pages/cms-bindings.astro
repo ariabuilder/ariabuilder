@@ -1,0 +1,37 @@
+---
+import { getCollection } from "astro:content";
+
+/* @aria-cms-query:featured-post */
+const featured = (await getCollection("posts")).find((entry) => (entry.data.slug ?? entry.id) === "featured");
+/* @aria-cms-query-end:featured-post */
+
+/* @aria-cms-query:post-loop */
+const posts = await getCollection("posts");
+/* @aria-cms-query-end:post-loop */
+
+/* @aria-cms-lookup:authors */
+const authorsById = new Map((await getCollection("authors")).flatMap((entry) => {
+  const value = { ...entry.data, id: entry.id, slug: entry.data.slug ?? entry.id, title: entry.data.title ?? entry.id, body: entry.body, ariaEntryId: entry.data.ariaEntryId };
+  return [entry.id, entry.data.slug, entry.data.ariaEntryId].filter(Boolean).map((key) => [String(key), value]);
+}));
+/* @aria-cms-lookup-end:authors */
+
+/* @aria-cms-lookup:tags */
+const tagsById = new Map((await getCollection("tags")).flatMap((entry) => {
+  const value = { ...entry.data, id: entry.id, slug: entry.data.slug ?? entry.id, title: entry.data.title ?? entry.id, body: entry.body, ariaEntryId: entry.data.ariaEntryId };
+  return [entry.id, entry.data.slug, entry.data.ariaEntryId].filter(Boolean).map((key) => [String(key), value]);
+}));
+/* @aria-cms-lookup-end:tags */
+---
+<main>
+  <h1 data-smoke="single">{featured?.data?.["title"] ?? "Missing single entry"}</h1>
+  <ul data-smoke="loop">
+    {posts.map((post) => <li>{post.data.title}</li>)}
+  </ul>
+  <p data-smoke="reference">
+    {/* @aria-cms-field:author.name */ authorsById.get(String(((featured?.data?.["author"])?.id ?? (featured?.data?.["author"])?.slug ?? (featured?.data?.["author"])?.ariaEntryId ?? featured?.data?.["author"]) ?? ""))?.["name"] ?? "Missing author"}
+  </p>
+  <p data-smoke="relation">
+    {/* @aria-cms-field:tags.0.label */ tagsById.get(String(((((Array.isArray(featured?.data?.["tags"]) ? featured?.data?.["tags"][0] : undefined))?.id ?? ((Array.isArray(featured?.data?.["tags"]) ? featured?.data?.["tags"][0] : undefined))?.slug ?? ((Array.isArray(featured?.data?.["tags"]) ? featured?.data?.["tags"][0] : undefined))?.ariaEntryId ?? (Array.isArray(featured?.data?.["tags"]) ? featured?.data?.["tags"][0] : undefined))) ?? ""))?.["label"] ?? "Missing tag"}
+  </p>
+</main>

@@ -79,6 +79,26 @@ describe("useComposerPreviewCoordinator", () => {
     )
   })
 
+  it("publishes the exact patched source when the caller provides it", async () => {
+    vi.useFakeTimers()
+    const coordinator = useComposerPreviewCoordinator({
+      projectPath: ref("/project"), editFile: ref("src/pages/index.astro"),
+      patchNodes: vi.fn(), reconcile: vi.fn(),
+    })
+    const before = model()
+    const after = structuredClone(before)
+    if (after.nodes[0]?.kind !== "element") throw new Error()
+    after.nodes[0].props.title = { type: "expr", value: "Astro.props.title" }
+    const exact = `---\nconst untouched =  true\n---\n<div title={Astro.props.title}>A</div>\n`
+    coordinator.applyModelMutation(before, after, { source: exact })
+
+    await vi.advanceTimersByTimeAsync(0)
+    expect(setDraft).toHaveBeenCalledWith(
+      "/project", "src/pages/index.astro", exact,
+      coordinator.leaseId, 1,
+    )
+  })
+
   it("uses a reserved transaction revision without incrementing it again", () => {
     const patches = vi.fn()
     const coordinator = useComposerPreviewCoordinator({

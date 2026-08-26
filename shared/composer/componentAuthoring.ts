@@ -46,6 +46,8 @@ export type ComposerCmsPreviewEntry = {
   status?: string;
   locale?: string;
   route: string;
+  /** Changes whenever the entry content used by previews changes. */
+  version?: string;
 };
 
 export type ComposerCmsEntryTemplatePreviewContext = {
@@ -56,6 +58,9 @@ export type ComposerCmsEntryTemplatePreviewContext = {
   entries: ComposerCmsPreviewEntry[];
   selectedEntryId: string | null;
   previewRoute: string | null;
+  sourceKind?: import("../types").CollectionSourceKind;
+  writable?: boolean;
+  writableTextFields?: string[];
 };
 
 /** One exact rendered component invocation in an inline editing trail. */

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { isProxy, isReactive, ref } from "vue"
 import type { AstroDocumentModel } from "../../../shared/composer/types"
+import { parseAstro } from "../../../shared/composer/parseAstro"
 import { createComposerBeacon } from "./selection/useComposerBeacon"
 import { useComposerDocument } from "./useComposerDocument"
 import { blankModel } from "./useComposerDocument.fixture"
@@ -39,6 +40,165 @@ beforeEach(() => {
 })
 
 describe("useComposerDocument persistence", () => {
+  it("fails closed when an existing document has no exact source", () => {
+    const model = ref<AstroDocumentModel | null>(blankModel())
+    const doc = useComposerDocument({
+      projectPath: ref("/tmp/project"),
+      editFile: ref<string | null>("src/pages/index.astro"),
+      editedMtimeMs: ref<number | null>(1000),
+      model,
+      editable: ref(true),
+      designActive: ref(true),
+      exactSource: ref<string | null>(null),
+      codeDirty: ref(false),
+      beacon: createComposerBeacon(),
+    })
+
+    expect(doc.mutateModel((next) => {
+      next.extraFrontmatter = "const changed = true"
+      return { ok: true }
+    })).toBe(false)
+    expect(doc.saveError.value).toContain("exact Astro source is unavailable")
+    expect(commitComposerEditTransaction).not.toHaveBeenCalled()
+  })
+
+  it("leaves the model and disk transaction untouched when an expression range is unsafe", async () => {
+    const source = `<main><h1>{heroCopy?.data?.["heading"]}</h1><p>Keep</p></main>`
+    const parsed = await parseAstro(source)
+    if (!parsed.editable) throw new Error(parsed.reason)
+    const expression = parsed.model.nodes[0]?.kind === "element"
+      && parsed.model.nodes[0].children?.[0]?.kind === "element"
+      ? parsed.model.nodes[0].children[0].children?.[0]
+      : null
+    if (!expression || expression.kind !== "expr" || !expression.sourceRange) {
+      throw new Error("expression missing")
+    }
+    expression.sourceRange.to += "</h1><p>".length
+    const model = ref<AstroDocumentModel | null>(parsed.model)
+    const beacon = createComposerBeacon()
+    beacon.illuminate("0.0.0")
+    const doc = useComposerDocument({
+      projectPath: ref("/tmp/project"),
+      editFile: ref<string | null>("src/pages/index.astro"),
+      editedMtimeMs: ref<number | null>(1000),
+      model,
+      editable: ref(true),
+      designActive: ref(true),
+      exactSource: ref<string | null>(source),
+      codeDirty: ref(false),
+      beacon,
+    })
+
+    expect(doc.setSelectedText('{heroCopy?.data?.["title"]}')).toBe(false)
+    expect(model.value).toEqual(parsed.model)
+    expect(doc.saveError.value).toBe("The changed node has no safe source range.")
+    expect(commitComposerEditTransaction).not.toHaveBeenCalled()
+  })
+
+  it("persists repeated Props edits as an exact-source patch", async () => {
+    const source = `---\nconst untouched =  true\n---\n<section   data-note='keep'>\n  <!-- preserve -->\n  <Card title="Builder" />\n</section>\n`
+    const parsed = await parseAstro(source)
+    if (!parsed.editable) throw new Error(parsed.reason)
+    const model = ref<AstroDocumentModel | null>(parsed.model)
+    const exactSource = ref<string | null>(source)
+    const beacon = createComposerBeacon()
+    beacon.illuminate("0.1", { source: "structure" })
+    const onExactSourcePersisted = vi.fn((next: string) => {
+      exactSource.value = next
+    })
+    const doc = useComposerDocument({
+      projectPath: ref("/tmp/project"),
+      editFile: ref<string | null>("src/pages/index.astro"),
+      editedMtimeMs: ref<number | null>(1000),
+      model,
+      editable: ref(true),
+      designActive: ref(true),
+      exactSource,
+      onExactSourcePersisted,
+      codeDirty: ref(false),
+      beacon,
+    })
+
+    expect(
+      doc.setSelectedProp("title", { type: "string", value: "Builde" }),
+      doc.saveError.value ?? "",
+    ).toBe(true)
+    expect(doc.setSelectedProp("title", { type: "string", value: "Build" })).toBe(true)
+    await doc.flushSave()
+
+    const transaction = commitComposerEditTransaction.mock.calls[0]![0] as {
+      page?: unknown
+      sources?: Array<{ source: string; expectedSource?: string }>
+    }
+    expect(transaction.page).toBeUndefined()
+    expect(transaction.sources).toEqual([{
+      relativeFile: "src/pages/index.astro",
+      source: expect.stringContaining('<Card title="Build" />'),
+      expectedSource: source,
+      expectedMtimeMs: 1000,
+    }])
+    expect(transaction.sources?.[0]?.source).toContain("const untouched =  true")
+    expect(transaction.sources?.[0]?.source).toContain("<section   data-note='keep'>")
+    expect(transaction.sources?.[0]?.source).toContain("  <!-- preserve -->")
+    expect(onExactSourcePersisted).toHaveBeenCalledWith(transaction.sources?.[0]?.source)
+    expect(doc.dirty.value).toBe(false)
+  })
+
+  it("keeps and flushes a newer exact-source revision after an overlapping save", async () => {
+    const source = `---\nconst untouched =  true\n---\n<div title="One"></div>\n`
+    const parsed = await parseAstro(source)
+    if (!parsed.editable) throw new Error(parsed.reason)
+    const model = ref<AstroDocumentModel | null>(parsed.model)
+    const exactSource = ref<string | null>(source)
+    const onExactSourcePersisted = vi.fn((next: string) => {
+      exactSource.value = next
+    })
+    let finishFirst: (value: unknown) => void = () => undefined
+    commitComposerEditTransaction
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        finishFirst = resolve
+      }))
+      .mockResolvedValueOnce({
+        ok: true,
+        revisions: [{ relativeFile: "src/pages/index.astro", mtimeMs: 3000 }],
+      })
+    const beacon = createComposerBeacon()
+    beacon.illuminate("0")
+    const doc = useComposerDocument({
+      projectPath: ref("/tmp/project"),
+      editFile: ref<string | null>("src/pages/index.astro"),
+      editedMtimeMs: ref<number | null>(1000),
+      model,
+      editable: ref(true),
+      designActive: ref(true),
+      exactSource,
+      onExactSourcePersisted,
+      codeDirty: ref(false),
+      beacon,
+    })
+
+    expect(
+      doc.setSelectedProp("title", { type: "string", value: "Two" }),
+      doc.saveError.value ?? "",
+    ).toBe(true)
+    const firstFlush = doc.flushSave()
+    await vi.waitFor(() => expect(commitComposerEditTransaction).toHaveBeenCalledTimes(1))
+    expect(doc.setSelectedProp("title", { type: "string", value: "Three" })).toBe(true)
+    finishFirst({
+      ok: true,
+      revisions: [{ relativeFile: "src/pages/index.astro", mtimeMs: 2000 }],
+    })
+    await firstFlush
+    await vi.waitFor(() => expect(commitComposerEditTransaction).toHaveBeenCalledTimes(2))
+
+    const second = commitComposerEditTransaction.mock.calls[1]![0] as {
+      sources: Array<{ source: string; expectedSource: string }>
+    }
+    expect(second.sources[0]?.source).toContain('title="Three"')
+    expect(second.sources[0]?.expectedSource).toContain('title="Two"')
+    await vi.waitFor(() => expect(doc.dirty.value).toBe(false))
+  })
+
   it("clones the reactive model so Electron IPC structured-clone succeeds", async () => {
     const projectPath = ref("/tmp/project")
     const editFile = ref<string | null>("src/layouts/BaseLayout.astro")
@@ -266,5 +426,66 @@ describe("useComposerDocument persistence", () => {
     await doc.flushSave()
     expect(commitComposerEditTransaction).not.toHaveBeenCalled()
     expect(doc.dirty.value).toBe(true)
+  })
+
+  it("keeps a canvas text session off disk and records the full edit as one undo", async () => {
+    const source = `<main><h1>Builder</h1><p>Keep</p></main>`
+    const parsed = await parseAstro(source)
+    if (!parsed.editable) throw new Error(parsed.reason)
+    const model = ref<AstroDocumentModel | null>(parsed.model)
+    const exactSource = ref<string | null>(source)
+    const doc = useComposerDocument({
+      projectPath: ref("/tmp/project"),
+      editFile: ref<string | null>("src/pages/index.astro"),
+      editedMtimeMs: ref<number | null>(1000),
+      model,
+      editable: ref(true),
+      designActive: ref(true),
+      exactSource,
+      onExactSourcePersisted: (next) => { exactSource.value = next },
+      beacon: createComposerBeacon(),
+    })
+
+    expect(doc.beginCanvasTextEdit({ sessionId: "text-1", path: "0.0.0", occurrence: 0 })).toEqual({ ok: true, value: "Builder" })
+    expect(doc.updateCanvasTextEdit({ sessionId: "text-1", path: "0.0.0", occurrence: 0, sequence: 1, value: "B" })).toBe(true)
+    expect(doc.updateCanvasTextEdit({ sessionId: "text-1", path: "0.0.0", occurrence: 0, sequence: 2, value: "Built" })).toBe(true)
+    expect(commitComposerEditTransaction).not.toHaveBeenCalled()
+    expect(doc.canUndo.value).toBe(true)
+
+    expect(await doc.finishCanvasTextEdit("text-1", "commit")).toMatchObject({ ok: true, value: "Built" })
+    await doc.flushSave()
+    expect(commitComposerEditTransaction).toHaveBeenCalledTimes(1)
+    expect(commitComposerEditTransaction.mock.calls[0]?.[0].sources[0].source).toBe(
+      `<main><h1>Built</h1><p>Keep</p></main>`,
+    )
+  })
+
+  it("restores model, exact source history, and dirty state when canvas text is canceled", async () => {
+    const source = `<h1>Builder</h1>`
+    const parsed = await parseAstro(source)
+    if (!parsed.editable) throw new Error(parsed.reason)
+    const model = ref<AstroDocumentModel | null>(parsed.model)
+    const doc = useComposerDocument({
+      projectPath: ref("/tmp/project"),
+      editFile: ref<string | null>("src/pages/index.astro"),
+      editedMtimeMs: ref<number | null>(1000),
+      model,
+      editable: ref(true),
+      designActive: ref(true),
+      exactSource: ref<string | null>(source),
+      beacon: createComposerBeacon(),
+    })
+
+    doc.beginCanvasTextEdit({ sessionId: "text-2", path: "0.0", occurrence: 0 })
+    doc.updateCanvasTextEdit({ sessionId: "text-2", path: "0.0", occurrence: 0, sequence: 1, value: "B" })
+    doc.updateCanvasTextEdit({ sessionId: "text-2", path: "0.0", occurrence: 0, sequence: 2, value: "Longer heading" })
+    expect(await doc.finishCanvasTextEdit("text-2", "cancel")).toEqual({ ok: true, value: "Builder" })
+    expect(model.value?.nodes[0]?.kind === "element" && model.value.nodes[0].children?.[0]?.kind === "text"
+      ? model.value.nodes[0].children[0].value
+      : null).toBe("Builder")
+    expect(doc.dirty.value).toBe(false)
+    expect(doc.canUndo.value).toBe(false)
+    await doc.flushSave()
+    expect(commitComposerEditTransaction).not.toHaveBeenCalled()
   })
 })

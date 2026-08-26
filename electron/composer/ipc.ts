@@ -3,7 +3,7 @@ import { shell, type IpcMainInvokeEvent } from "../electron-api";
 import { requireOpenSession } from "../sessions";
 import { readCollections } from "../collections";
 import { getEntry } from "../cms";
-import { analyzeComposerSource, applyProjectTranslationCutover, applyProjectDataCutover, assessProjectTranslationAdoption, assessProjectDataAdoption, clearComposerPreviewDraft, completeComposerCode, commitComposerEditTransaction, extractComposerPropSchema, detectComposerFrameworks, createProjectDataDraft, createProjectTranslationDrafts, editComposerProjectData, editProjectTranslationValue, inspectComposerProjectData, listProjectTranslationCatalogs, parseComposerPage, prepareComponentAuthoringPreview, setComposerPreviewDraft, writeComposerPage, writeComposerComponentControlMetadata } from "./";
+import { analyzeComposerSource, applyProjectTranslationCutover, applyProjectDataCutover, assessProjectTranslationAdoption, assessProjectDataAdoption, clearComposerPreviewDraft, completeComposerCode, commitComposerEditTransaction, extractComposerPropSchema, detectComposerFrameworks, createProjectDataDraft, createProjectTranslationDrafts, editComposerProjectData, editProjectDataCatalogValue, editProjectTranslationValue, inspectComposerProjectData, listProjectData, listProjectTranslationCatalogs, parseComposerPage, prepareComponentAuthoringPreview, setComposerPreviewDraft, writeComposerPage, writeComposerComponentControlMetadata } from "./";
 import { runProjectMutation } from "../mutations";
 import { canonicalDirectory, resolveWithinRoot } from "../pathSafety";
 import type { IpcRegistrar, IpcRuntimeContext } from "../ipc/registrar";
@@ -112,6 +112,31 @@ export function registerComposerIpc(
         projectPath: string,
         input: import("../../shared/composer").ComposerDataInspectionInput,
       ) => inspectComposerProjectData(requireOpenSession(projectPath), input),
+    );
+
+  handle(
+      "composer:list_project_data",
+      (
+        _event: IpcMainInvokeEvent,
+        projectPath: string,
+        input: import("../../shared/composer").ProjectDataCatalogInput,
+      ) => listProjectData(requireOpenSession(projectPath), input),
+    );
+
+  handle(
+      "composer:edit_project_data_catalog_value",
+      (
+        _event: IpcMainInvokeEvent,
+        projectPath: string,
+        input: import("../../shared/composer").ProjectDataCatalogEditInput,
+      ) => {
+        const root = requireOpenSession(projectPath);
+        return runProjectMutation(
+          root,
+          { actor: "user", surface: "composer", operation: "edit project data catalog value", targets: [input.sourceFile] },
+          () => editProjectDataCatalogValue(root, input),
+        );
+      },
     );
 
   handle(

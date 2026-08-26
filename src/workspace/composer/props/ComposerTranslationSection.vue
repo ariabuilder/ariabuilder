@@ -28,10 +28,12 @@ import { inferContentDirection } from "../../../../shared/localization"
 import { tryUseComposerBeacon } from "../selection/useComposerBeacon"
 import { tryUseComposerDocument } from "../useComposerDocumentSession"
 import { tryUseComposerTranslations } from "../useComposerTranslations"
+import { tryUseComposerCanvasTextDraft } from "../useComposerCanvasTextDraft"
 
 const doc = tryUseComposerDocument()
 const beacon = tryUseComposerBeacon()
 const translations = tryUseComposerTranslations()
+const canvasTextDraft = tryUseComposerCanvasTextDraft()
 const catalogId = ref("")
 const namespaceName = ref("")
 const keyName = ref("")
@@ -58,6 +60,10 @@ const key = computed(() => namespace.value?.keys.find((item) => item.path.join("
 const activeLocale = computed(() => {
   const selected = translations?.activeLocale.value
   return selected && catalog.value?.locales.includes(selected) ? selected : catalog.value?.defaultLocale ?? ""
+})
+const inlineTranslationDraft = computed(() => {
+  const session = canvasTextDraft?.session.value
+  return session?.owner?.kind === "translation" ? session : null
 })
 const selectedPath = computed(() => beacon?.selectedPath.value ?? null)
 const selection = computed(() => doc?.model.value && selectedPath.value ? describeComposerCmsSelection(doc.model.value, selectedPath.value) : null)
@@ -347,10 +353,41 @@ async function applyCutover() {
 }
 
 watch(catalogs, (items) => { if (!items.some((item) => item.id === catalogId.value)) catalogId.value = items[0]?.id ?? "" }, { immediate: true })
-watch(catalog, (value) => { namespaceName.value = value?.namespaces[0]?.name ?? ""; void checkSettings() }, { immediate: true })
-watch(namespace, (value) => { keyName.value = value?.keys[0]?.path.join(".") ?? "" }, { immediate: true })
-watch(key, (value) => { editingValue.value = scalarDraft(value?.values[activeLocale.value]) }, { immediate: true })
-watch(activeLocale, () => { editingValue.value = scalarDraft(key.value?.values[activeLocale.value]) })
+watch(catalog, (value) => {
+  const owner = inlineTranslationDraft.value?.owner
+  namespaceName.value = owner?.kind === "translation" && owner.catalogId === value?.id
+    ? owner.namespace
+    : value?.namespaces[0]?.name ?? ""
+  void checkSettings()
+}, { immediate: true })
+watch(namespace, (value) => {
+  const owner = inlineTranslationDraft.value?.owner
+  keyName.value = owner?.kind === "translation" && owner.namespace === value?.name
+    ? owner.keyPath.join(".")
+    : value?.keys[0]?.path.join(".") ?? ""
+}, { immediate: true })
+watch(key, (value) => {
+  editingValue.value = inlineTranslationDraft.value?.draft
+    ?? scalarDraft(value?.values[activeLocale.value])
+}, { immediate: true })
+watch(activeLocale, () => {
+  editingValue.value = inlineTranslationDraft.value?.draft
+    ?? scalarDraft(key.value?.values[activeLocale.value])
+})
+watch(
+  () => canvasTextDraft?.session.value,
+  (session) => {
+    if (session?.owner?.kind === "translation") {
+      catalogId.value = session.owner.catalogId
+      namespaceName.value = session.owner.namespace
+      keyName.value = session.owner.keyPath.join(".")
+      editingValue.value = session.draft
+    } else {
+      editingValue.value = scalarDraft(key.value?.values[activeLocale.value])
+    }
+  },
+  { deep: true },
+)
 </script>
 
 <template>
@@ -379,8 +416,8 @@ watch(activeLocale, () => { editingValue.value = scalarDraft(key.value?.values[a
 
       <div v-if="key?.editable" class="space-y-1.5 border-t border-dashed border-border/70 pt-3">
         <Label for="translation-active-value" class="text-[10px] text-muted-foreground">Edit {{ activeLocale.toUpperCase() }} value</Label>
-        <Input id="translation-active-value" v-model="editingValue" class="h-8 text-xs" :disabled="busy" />
-        <Button type="button" variant="outline" size="sm" class="h-7 w-full text-[10px]" :disabled="busy" @click="saveValue">Save catalog value</Button>
+        <Input id="translation-active-value" v-model="editingValue" class="h-8 text-xs" :disabled="busy || Boolean(inlineTranslationDraft)" />
+        <Button type="button" variant="outline" size="sm" class="h-7 w-full text-[10px]" :disabled="busy || Boolean(inlineTranslationDraft)" @click="saveValue">Save catalog value</Button>
       </div>
 
       <Button type="button" variant="ghost" size="sm" class="h-7 w-full text-[10px] text-muted-foreground" :disabled="busy" @click="reviewAdoption">Review CMS adoption</Button>

@@ -20,6 +20,7 @@ import type {
   DevicePreview,
   ProjectSession,
   WorkspaceActiveDocument,
+  WorkspaceComposerCanvasTarget,
   WorkspaceRailId,
 } from "@/workspace/types"
 import { m } from "@/paraglide/messages.js"
@@ -38,6 +39,10 @@ const props = defineProps<{
   onSelectProject: (projectPath: string) => void
   onOpenProjectWindow: (projectPath: string) => void
   onOpenComposerDesignTools: () => void
+  composerEditTrail?: WorkspaceActiveDocument[]
+  composerCanvasTargets?: WorkspaceComposerCanvasTarget[]
+  onComposerBreadcrumbSelect: (index: number) => Promise<void> | void
+  onOpenComposerCanvasTarget: (id: string) => Promise<boolean> | boolean
   onToggleAgent: () => void
   agentOpen: boolean
   onDeviceChange: (device: DevicePreview) => void
@@ -51,7 +56,6 @@ const status = computed(() => props.runtime?.status ?? "stopped")
 const canOpenPreview = computed(
   () => status.value === "live" && Boolean(props.runtime?.previewUrl),
 )
-
 function openPreview() {
   if (!canOpenPreview.value || !props.runtime?.previewUrl) return
   const url = previewPageUrl(props.runtime.previewUrl, props.session.selectedRoute)
@@ -94,7 +98,7 @@ function closeProjectSwitcher() {
           :on-will-open="closePageSwitcher"
         />
       </div>
-      <div class="app-region-no-drag">
+      <div class="app-region-no-drag min-w-0">
         <PageSwitcher
           ref="pageSwitcherRef"
           :project-path="session.root"
@@ -104,6 +108,10 @@ function closeProjectSwitcher() {
           :selected-route="session.selectedRoute"
           :current-rail="session.rail"
           :active-document="activeComposerDocument"
+          :composer-edit-trail="composerEditTrail"
+          :composer-canvas-targets="composerCanvasTargets"
+          :on-composer-breadcrumb-select="onComposerBreadcrumbSelect"
+          :on-open-composer-canvas-target="onOpenComposerCanvasTarget"
           :on-select="onSelectRoute"
           :on-select-rail="onSelectRail"
           :on-refresh="onRefreshScan"

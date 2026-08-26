@@ -70,7 +70,7 @@ const statusLabel = computed(() => {
     @keydown.enter.prevent="emit('open', entry.id)"
     @keydown.space.prevent="emit('open', entry.id)"
   >
-    <div class="relative aspect-video overflow-hidden bg-muted/25">
+    <div class="relative aspect-video overflow-hidden">
       <CmsEntryCoverThumb
         :frontmatter="entry.frontmatter"
         :title="entry.title"

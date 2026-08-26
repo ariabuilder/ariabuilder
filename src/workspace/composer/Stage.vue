@@ -25,6 +25,10 @@ import {
   type AriaClickMessage,
   type AriaComputedStyleResponseMessage,
   type AriaHoverMessage,
+  type AriaInlineTextChangeMessage,
+  type AriaInlineTextFinishMessage,
+  type AriaInlineTextRequestMessage,
+  type AriaInlineTextStartResultMessage,
   type AriaDropHitMessage,
   type AriaOpenMessage,
   type AriaPasteMessage,
@@ -37,7 +41,15 @@ import {
   type AriaShortcutMessage,
   type AriaViewportMessage,
 } from "../../../shared/composer/protocol"
+import {
+  resolveCanvasTextTarget,
+  canvasTextMirrorPaths,
+  isWritableCmsTextOwner,
+  type CanvasTextTarget,
+} from "../../../shared/composer/canvasText"
+import type { AriaEntryRecord } from "../../../shared/cms"
 import type { AstroDocumentModel } from "../../../shared/composer/types"
+import type { ComposerCmsEntryTemplatePreviewContext } from "../../../shared/composer/componentAuthoring"
 import {
   composerOverlayRects,
   visualAffordanceRect,
@@ -60,6 +72,10 @@ import StageOverlays, {
 import { tryUseComposerBeacon } from "./selection/useComposerBeacon"
 import { tryUseComposerBridgeClasses } from "./useComposerBridgeClasses"
 import { tryUseComposerDocument } from "./useComposerDocumentSession"
+import { tryUseComposerTranslations } from "./useComposerTranslations"
+import { tryUseComposerCanvasTextDraft } from "./useComposerCanvasTextDraft"
+import { editComposerTranslationValue } from "@/lib/composer"
+import { getCmsEntry, updateCmsEntry } from "@/lib/cms"
 import {
   clearComposerDrag,
   COMPOSER_DRAG_CHANGE_EVENT,
@@ -106,6 +122,7 @@ const props = defineProps<{
   canvasActive?: boolean
   /** Editor-owned font CSS synchronized into the preview document. */
   fontStylesheetUrls?: string[]
+  cmsEntryTemplatePreview?: ComposerCmsEntryTemplatePreviewContext | null
 }>()
 
 const emit = defineEmits<{
@@ -119,6 +136,7 @@ const emit = defineEmits<{
   "hard-reload": [payload: { revision: number; reason: string }]
   "patch-result": [payload: AriaPatchResultMessage]
   "reconcile-result": [payload: AriaReconcileResultMessage]
+  "cms-entry-updated": [payload: { entryId: string; title?: string }]
 }>()
 
 const busy = ref(false)
@@ -144,6 +162,31 @@ let bridgeHandshakeTimer: ReturnType<typeof setTimeout> | null = null
 let controlledReloadRevision = 0
 let controlledReloadTimer: ReturnType<typeof setTimeout> | null = null
 let latestReconcileRevision = 0
+let activeInlineTextSessionId: string | null = null
+let activeInlineTextRequestId: string | null = null
+let activeInlineTextSequence = 0
+let activeInlineTextFinishing = false
+let inlineTextSessionSequence = 0
+let activeBoundInlineText: null | {
+  sessionId: string
+  target: Extract<CanvasTextTarget, { kind: "cms" | "translation" }>
+  originalValue: string
+  draft: string
+  lastSequence: number
+  destination: string
+  cms?: {
+    collectionId: string
+    record: AriaEntryRecord
+    locale: AriaEntryRecord["locales"][number]
+  }
+  translation?: {
+    catalogId: string
+    sourceHash: string
+    namespace: string
+    keyPath: string[]
+    locale: string
+  }
+} = null
 
 function clearControlledReloadTimer() {
   if (controlledReloadTimer) clearTimeout(controlledReloadTimer)
@@ -213,6 +256,8 @@ let lastSentRevealNonce = 0
 
 const beacon = tryUseComposerBeacon()
 const doc = tryUseComposerDocument()
+const translations = tryUseComposerTranslations()
+const canvasTextDraft = tryUseComposerCanvasTextDraft()
 const canvasDragActive = ref(false)
 const dropHit = ref<AriaDropHitMessage | null>(null)
 
@@ -617,6 +662,486 @@ function postToPreview(message: unknown) {
   }
 }
 
+function rejectInlineTextRequest(requestId: string, reason: string) {
+  if (activeInlineTextRequestId === requestId) activeInlineTextRequestId = null
+  postToPreview({
+    type: ARIA_MSG.inlineTextStartResult,
+    requestId,
+    ok: false,
+    reason,
+  })
+}
+
+function clearInlineTextHostState(sessionId: string) {
+  if (activeInlineTextSessionId === sessionId) activeInlineTextSessionId = null
+  if (activeBoundInlineText?.sessionId === sessionId) activeBoundInlineText = null
+  if (canvasTextDraft?.session.value?.sessionId === sessionId) {
+    canvasTextDraft.session.value = null
+  }
+  activeInlineTextSequence = 0
+  activeInlineTextFinishing = false
+}
+
+async function onInlineTextStartResult(message: AriaInlineTextStartResultMessage) {
+  if (message.requestId !== activeInlineTextRequestId) return
+  activeInlineTextRequestId = null
+  if (message.ok) return
+  const sessionId = message.sessionId ?? activeInlineTextSessionId
+  if (!sessionId || sessionId !== activeInlineTextSessionId) return
+  if (activeBoundInlineText?.sessionId !== sessionId) {
+    await doc?.finishCanvasTextEdit(sessionId, "cancel")
+  }
+  clearInlineTextHostState(sessionId)
+}
+
+function cancelPendingInlineTextFromHost(reason: string) {
+  const requestId = activeInlineTextRequestId
+  if (!requestId) return
+  const sessionId = activeInlineTextSessionId
+  activeInlineTextRequestId = null
+  postToPreview({
+    type: ARIA_MSG.inlineTextStartResult,
+    requestId,
+    ok: false,
+    reason,
+  })
+  if (!sessionId) return
+  if (activeBoundInlineText?.sessionId !== sessionId) {
+    void doc?.finishCanvasTextEdit(sessionId, "cancel")
+  }
+  clearInlineTextHostState(sessionId)
+}
+
+async function onInlineTextRequest(message: AriaInlineTextRequestMessage) {
+  const model = doc?.model.value
+  const selectedPath = toVisibleModelPath(message.path)
+  if (!doc || !model || !selectedPath) {
+    rejectInlineTextRequest(message.requestId, "The selected text is not editable.")
+    return
+  }
+  if (activeInlineTextSessionId || activeInlineTextRequestId) {
+    rejectInlineTextRequest(message.requestId, "Finish the current text edit first.")
+    return
+  }
+  activeInlineTextRequestId = message.requestId
+
+  try {
+    const target = resolveCanvasTextTarget(model, selectedPath, message.renderedValue)
+    if (!target) {
+      rejectInlineTextRequest(message.requestId, "Select a plain heading or text element.")
+      return
+    }
+    const mirrorPaths = () => canvasTextMirrorPaths(model, target).map(
+      (path) => toCanvasPath(path) ?? path,
+    )
+    const sessionId = `inline-${Date.now().toString(36)}-${++inlineTextSessionSequence}`
+
+    if (target.kind === "cms") {
+      const context = props.cmsEntryTemplatePreview
+      const selectedEntry = context?.entries.find(
+        (entry) => entry.id === context.selectedEntryId,
+      )
+      if (
+        context && isWritableCmsTextOwner(model, target, context) && selectedEntry
+      ) {
+        const record = await getCmsEntry(
+          props.projectPath,
+          context.collectionId,
+          selectedEntry.id,
+        )
+        if (activeInlineTextRequestId !== message.requestId) return
+        const locale = record?.locales.find((item) => item.locale === selectedEntry.locale)
+          ?? record?.locales.find((item) => item.isSource)
+          ?? record?.locales[0]
+        const ownerValue = locale
+          ? (target.field === "title" ? locale.title : locale.frontmatter[target.field])
+          : undefined
+        if (!record || !locale || typeof ownerValue !== "string") {
+          rejectInlineTextRequest(message.requestId, "The CMS value could not be loaded for editing.")
+          return
+        }
+        activeInlineTextSessionId = sessionId
+        activeInlineTextSequence = 0
+        activeInlineTextFinishing = false
+        activeBoundInlineText = {
+          sessionId,
+          target,
+          originalValue: ownerValue,
+          draft: ownerValue,
+          lastSequence: 0,
+          destination: `CMS · ${context.collectionLabel} · ${target.field}`,
+          cms: { collectionId: context.collectionId, record, locale },
+        }
+        if (canvasTextDraft) canvasTextDraft.session.value = {
+          sessionId,
+          sourcePath: target.path,
+          visibleOwnerPath: target.visibleOwnerPath,
+          originalValue: ownerValue,
+          draft: ownerValue,
+          occurrence: message.occurrence,
+          target,
+          owner: {
+            kind: "cms",
+            collectionId: context.collectionId,
+            collectionName: context.collectionName,
+            field: target.field,
+            locale: locale.locale,
+          },
+        }
+        postToPreview({
+          type: ARIA_MSG.inlineTextStart,
+          requestId: message.requestId,
+          sessionId,
+          path: toCanvasPath(target.path) ?? target.path,
+          occurrence: message.occurrence,
+          value: ownerValue,
+          mirrorPaths: mirrorPaths(),
+          ...(message.initialInput !== undefined ? { initialInput: message.initialInput } : {}),
+        })
+        return
+      }
+    }
+    if (target.kind === "translation" && translations && doc.editFile.value) {
+      const found = translations.result.value.catalogs.flatMap((catalog) =>
+        catalog.consumers.map((consumer) => ({ catalog, consumer })),
+      ).find(({ consumer }) =>
+        consumer.file === doc.editFile.value &&
+        consumer.contextVariable === target.namespace &&
+        consumer.keyPath.join(".") === target.keyPath.join("."),
+      )
+      const namespace = found?.catalog.namespaces.find(
+        (item) => item.name === found.consumer.namespace,
+      )
+      const key = namespace?.keys.find(
+        (item) => item.path.join(".") === found?.consumer.keyPath.join("."),
+      )
+      const locale = translations.activeLocale.value
+      if (
+        found && key?.editable && found.catalog.capabilities.editScalar && locale &&
+        typeof key.values[locale] === "string"
+      ) {
+        const ownerValue = String(key.values[locale])
+        activeInlineTextSessionId = sessionId
+        activeInlineTextSequence = 0
+        activeInlineTextFinishing = false
+        activeBoundInlineText = {
+          sessionId,
+          target,
+          originalValue: ownerValue,
+          draft: ownerValue,
+          lastSequence: 0,
+          destination: `Translation · ${locale.toUpperCase()} · ${found.consumer.namespace}.${found.consumer.keyPath.join(".")}`,
+          translation: {
+            catalogId: found.catalog.id,
+            sourceHash: found.catalog.sourceHash,
+            namespace: found.consumer.namespace,
+            keyPath: found.consumer.keyPath,
+            locale,
+          },
+        }
+        if (canvasTextDraft) canvasTextDraft.session.value = {
+          sessionId,
+          sourcePath: target.path,
+          visibleOwnerPath: target.visibleOwnerPath,
+          originalValue: ownerValue,
+          draft: ownerValue,
+          occurrence: message.occurrence,
+          target,
+          owner: {
+            kind: "translation",
+            catalogId: found.catalog.id,
+            namespace: found.consumer.namespace,
+            keyPath: found.consumer.keyPath,
+            locale,
+          },
+        }
+        postToPreview({
+          type: ARIA_MSG.inlineTextStart,
+          requestId: message.requestId,
+          sessionId,
+          path: toCanvasPath(target.path) ?? target.path,
+          occurrence: message.occurrence,
+          value: ownerValue,
+          mirrorPaths: mirrorPaths(),
+          ...(message.initialInput !== undefined ? { initialInput: message.initialInput } : {}),
+        })
+        return
+      }
+    }
+
+    let detachExpression = false
+    if (target.kind !== "static") {
+      const destination = target.kind === "cms"
+        ? `CMS field “${target.field}”`
+        : target.kind === "translation"
+          ? `translation “${target.namespace}.${target.keyPath.join(".")}”`
+          : "Astro expression"
+      const accepted = await confirm({
+        title: "Replace connected text?",
+        description: `${target.kind === "detach-required" ? target.reason : `This text comes from ${destination}.`} Replacing it on the canvas removes that live connection and creates static text.`,
+        confirmLabel: "Replace with static text",
+        cancelLabel: "Keep connection",
+        destructive: true,
+      })
+      if (activeInlineTextRequestId !== message.requestId) return
+      if (!accepted) {
+        rejectInlineTextRequest(message.requestId, "The live connection was kept.")
+        return
+      }
+      detachExpression = true
+    }
+
+    const started = doc.beginCanvasTextEdit({
+      sessionId,
+      path: target.path,
+      occurrence: message.occurrence,
+      detachExpression,
+      renderedValue: target.value,
+    })
+    if (!started.ok) {
+      rejectInlineTextRequest(message.requestId, started.reason)
+      return
+    }
+    activeInlineTextSessionId = sessionId
+    activeInlineTextSequence = 0
+    activeInlineTextFinishing = false
+    if (canvasTextDraft) canvasTextDraft.session.value = {
+      sessionId,
+      sourcePath: target.path,
+      visibleOwnerPath: target.visibleOwnerPath,
+      originalValue: target.value,
+      draft: target.value,
+      occurrence: message.occurrence,
+      target,
+    }
+    postToPreview({
+      type: ARIA_MSG.inlineTextStart,
+      requestId: message.requestId,
+      sessionId,
+      path: toCanvasPath(target.path) ?? target.path,
+      occurrence: message.occurrence,
+      value: target.value,
+      mirrorPaths: detachExpression
+        ? [toCanvasPath(target.path) ?? target.path]
+        : mirrorPaths(),
+      ...(message.initialInput !== undefined ? { initialInput: message.initialInput } : {}),
+    })
+  } catch (cause) {
+    if (activeInlineTextRequestId === message.requestId) {
+      rejectInlineTextRequest(
+        message.requestId,
+        cause instanceof Error ? cause.message : String(cause),
+      )
+    }
+  }
+}
+
+function onInlineTextChange(message: AriaInlineTextChangeMessage) {
+  if (!doc || activeInlineTextFinishing || message.sessionId !== activeInlineTextSessionId) return
+  if (message.sequence <= activeInlineTextSequence) {
+    postToPreview({
+      type: ARIA_MSG.inlineTextResult,
+      sessionId: message.sessionId,
+      sequence: message.sequence,
+      ok: false,
+      reason: "This text update arrived out of order.",
+    })
+    return
+  }
+  if (activeBoundInlineText?.sessionId === message.sessionId) {
+    if (message.sequence <= activeBoundInlineText.lastSequence) return
+    activeBoundInlineText.lastSequence = message.sequence
+    activeInlineTextSequence = message.sequence
+    activeBoundInlineText.draft = message.value
+    if (canvasTextDraft?.session.value?.sessionId === message.sessionId) {
+      canvasTextDraft.session.value = {
+        ...canvasTextDraft.session.value,
+        draft: message.value,
+      }
+    }
+    postToPreview({
+      type: ARIA_MSG.inlineTextResult,
+      sessionId: message.sessionId,
+      sequence: message.sequence,
+      ok: true,
+      action: "change",
+    })
+    return
+  }
+  const path = toModelPath(message.path)
+  const ok = Boolean(path && doc.updateCanvasTextEdit({
+    sessionId: message.sessionId,
+    path,
+    occurrence: message.occurrence,
+    sequence: message.sequence,
+    value: message.value,
+  }))
+  if (ok) activeInlineTextSequence = message.sequence
+  if (!ok) {
+    void doc.finishCanvasTextEdit(message.sessionId, "cancel")
+    clearInlineTextHostState(message.sessionId)
+  }
+  if (ok && canvasTextDraft?.session.value?.sessionId === message.sessionId) {
+    canvasTextDraft.session.value = { ...canvasTextDraft.session.value, draft: message.value }
+  }
+  postToPreview({
+    type: ARIA_MSG.inlineTextResult,
+    sessionId: message.sessionId,
+    sequence: message.sequence,
+    ok,
+    action: "change",
+    ...(!ok ? { reason: doc.saveError.value || "The text could not be updated." } : {}),
+  })
+}
+
+async function onInlineTextFinish(message: AriaInlineTextFinishMessage) {
+  if (!doc || message.sessionId !== activeInlineTextSessionId) return
+  if (activeInlineTextFinishing) return
+  if (message.sequence <= activeInlineTextSequence) {
+    postToPreview({
+      type: ARIA_MSG.inlineTextResult,
+      sessionId: message.sessionId,
+      sequence: message.sequence,
+      ok: false,
+      reason: "This text editing session is stale.",
+    })
+    return
+  }
+  activeInlineTextSequence = message.sequence
+  activeInlineTextFinishing = true
+  const bound = activeBoundInlineText
+  if (bound?.sessionId === message.sessionId) {
+    if (message.action === "cancel") {
+      clearInlineTextHostState(message.sessionId)
+      postToPreview({
+        type: ARIA_MSG.inlineTextResult,
+        sessionId: message.sessionId,
+        sequence: message.sequence,
+        ok: true,
+        action: "cancel",
+        value: bound.originalValue,
+      })
+      return
+    }
+    try {
+      if (bound.cms) {
+        const { record, locale } = bound.cms
+        const field = bound.target.kind === "cms" ? bound.target.field : ""
+        await updateCmsEntry(props.projectPath, {
+          collectionId: bound.cms.collectionId,
+          id: record.entry.id,
+          version: record.entry.version,
+          patch: {
+            upsertLocale: {
+              locale: locale.locale,
+              title: field === "title" ? message.value : locale.title,
+              slug: locale.slug,
+              frontmatter: field === "title"
+                ? locale.frontmatter
+                : { ...locale.frontmatter, [field]: message.value },
+              body: locale.body,
+              isSource: locale.isSource,
+              status: locale.status,
+              publishedAt: locale.publishedAt,
+            },
+          },
+        })
+        emit("cms-entry-updated", {
+          entryId: record.entry.id,
+          ...(field === "title" ? { title: message.value } : {}),
+        })
+      } else if (bound.translation && translations) {
+        await editComposerTranslationValue(props.projectPath, {
+          catalogId: bound.translation.catalogId,
+          namespace: bound.translation.namespace,
+          keyPath: bound.translation.keyPath,
+          locale: bound.translation.locale,
+          value: message.value,
+          expectedSourceHash: bound.translation.sourceHash,
+        })
+        await translations.refresh(true)
+      }
+      clearInlineTextHostState(message.sessionId)
+      postToPreview({
+        type: ARIA_MSG.inlineTextResult,
+        sessionId: message.sessionId,
+        sequence: message.sequence,
+        ok: true,
+        action: "commit",
+        value: message.value,
+        destination: bound.destination,
+      })
+      emit("hard-reload", { revision: Date.now(), reason: "inline-owner-commit" })
+    } catch (cause) {
+      let authoritativeValue = bound.originalValue
+      if (bound.cms && bound.target.kind === "cms") {
+        try {
+          const latest = await getCmsEntry(
+            props.projectPath,
+            bound.cms.collectionId,
+            bound.cms.record.entry.id,
+          )
+          const latestLocale = latest?.locales.find((item) => item.locale === bound.cms?.locale.locale)
+            ?? latest?.locales.find((item) => item.isSource)
+            ?? latest?.locales[0]
+          const latestValue = latestLocale
+            ? (bound.target.field === "title"
+                ? latestLocale.title
+                : latestLocale.frontmatter[bound.target.field])
+            : undefined
+          if (typeof latestValue === "string") authoritativeValue = latestValue
+        } catch {
+          // Keep the session-start owner value when the authoritative refetch fails.
+        }
+      }
+      clearInlineTextHostState(message.sessionId)
+      postToPreview({
+        type: ARIA_MSG.inlineTextResult,
+        sessionId: message.sessionId,
+        sequence: message.sequence,
+        ok: false,
+        value: authoritativeValue,
+        reason: cause instanceof Error ? cause.message : String(cause),
+      })
+      beacon?.illuminate(bound.target.visibleOwnerPath, {
+        occurrence: bound.target.kind === "cms" || bound.target.kind === "translation"
+          ? message.occurrence
+          : 0,
+        source: "api",
+      })
+    }
+    return
+  }
+  const result = await doc.finishCanvasTextEdit(message.sessionId, message.action)
+  clearInlineTextHostState(message.sessionId)
+  postToPreview({
+    type: ARIA_MSG.inlineTextResult,
+    sessionId: message.sessionId,
+    sequence: message.sequence,
+    ok: result.ok,
+    action: message.action,
+    value: result.value,
+    ...(result.reason ? { reason: result.reason } : {}),
+  })
+}
+
+function finishActiveInlineTextFromHost() {
+  const session = canvasTextDraft?.session.value
+  if (
+    activeInlineTextFinishing || !session ||
+    session.sessionId !== activeInlineTextSessionId
+  ) return
+  void onInlineTextFinish({
+    type: ARIA_MSG.inlineTextFinish,
+    sessionId: session.sessionId,
+    path: toCanvasPath(session.sourcePath) ?? session.sourcePath,
+    occurrence: session.occurrence,
+    sequence: activeInlineTextSequence + 1,
+    value: session.draft,
+    action: "commit",
+  })
+}
+
 function activeFrameToken(): string {
   return activeFrameSlot.value === "a" ? frameAToken.value : frameBToken.value
 }
@@ -669,6 +1194,7 @@ function onVisibilityChange() {
 function sendNodePatches(payload: {
   revision: number
   patches: import("../../../shared/composer/previewDiff").ComposerDomPatch[]
+  inlineTextOrigin?: import("../../../shared/composer/canvasText").CanvasTextPatchOrigin
 }) {
   if (!canvasInteractionEnabled.value) return
   const scopeTree = (
@@ -683,6 +1209,14 @@ function sendNodePatches(payload: {
   postToPreview({
     type: ARIA_MSG.patchNodes,
     revision: payload.revision,
+    ...(payload.inlineTextOrigin
+      ? {
+          inlineTextOrigin: {
+            ...payload.inlineTextOrigin,
+            path: toCanvasPath(payload.inlineTextOrigin.path) ?? payload.inlineTextOrigin.path,
+          },
+        }
+      : {}),
     patches: payload.patches.map((patch) => patch.kind === "properties"
       ? { ...patch, path: toCanvasPath(patch.path) ?? patch.path }
       : {
@@ -1166,6 +1700,14 @@ function onPreviewMessage(event: MessageEvent) {
       html: msg.html || "",
       aria: msg.aria || "",
     })
+  } else if (event.data.type === ARIA_MSG.inlineTextRequest) {
+    void onInlineTextRequest(event.data as AriaInlineTextRequestMessage)
+  } else if (event.data.type === ARIA_MSG.inlineTextStartResult) {
+    void onInlineTextStartResult(event.data as AriaInlineTextStartResultMessage)
+  } else if (event.data.type === ARIA_MSG.inlineTextChange) {
+    onInlineTextChange(event.data as AriaInlineTextChangeMessage)
+  } else if (event.data.type === ARIA_MSG.inlineTextFinish) {
+    void onInlineTextFinish(event.data as AriaInlineTextFinishMessage)
   } else if (event.data.type === ARIA_MSG.dropHit) {
     dropHit.value = event.data as AriaDropHitMessage
   }
@@ -1279,6 +1821,30 @@ watch(
     rects.value = {}
     renderedPathname.value = null
     beacon?.clearHover()
+  },
+)
+
+watch(
+  () => beacon?.selectedPath.value ?? null,
+  (path) => {
+    if (activeInlineTextRequestId) {
+      cancelPendingInlineTextFromHost("Canvas text editing was canceled.")
+      return
+    }
+    const session = canvasTextDraft?.session.value
+    if (session && path !== session.visibleOwnerPath) finishActiveInlineTextFromHost()
+  },
+)
+
+watch(
+  () => [props.selectedRoute, props.pathScope, props.focusPath] as const,
+  (_next, previous) => {
+    if (!previous) return
+    if (activeInlineTextRequestId) {
+      cancelPendingInlineTextFromHost("Canvas text editing was canceled.")
+      return
+    }
+    finishActiveInlineTextFromHost()
   },
 )
 
@@ -1456,6 +2022,15 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (activeInlineTextRequestId) {
+    cancelPendingInlineTextFromHost("Canvas text editing was canceled.")
+  } else if (activeInlineTextSessionId) {
+    const sessionId = activeInlineTextSessionId
+    if (activeBoundInlineText?.sessionId !== sessionId) {
+      void doc?.finishCanvasTextEdit(sessionId, "cancel")
+    }
+    clearInlineTextHostState(sessionId)
+  }
   window.removeEventListener("message", onPreviewMessage)
   window.removeEventListener("focus", onHostFocus)
   document.removeEventListener("visibilitychange", onVisibilityChange)

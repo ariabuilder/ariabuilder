@@ -20,10 +20,10 @@ vi.mock("@/lib/cms", () => ({ listCmsEntries: mocks.listCmsEntries }))
 
 const mounted: Array<() => void> = []
 
-function mountSection() {
+function mountSection(sourceModel?: AstroDocumentModel) {
   const host = document.createElement("div")
   document.body.append(host)
-  const model = ref<AstroDocumentModel | null>({
+  const model = ref<AstroDocumentModel | null>(sourceModel ?? {
     imports: [],
     extraFrontmatter: "",
     nodes: [{ id: "text", kind: "text", value: "Hello" }],
@@ -97,5 +97,59 @@ describe("ComposerCmsSection", () => {
     await vi.waitFor(() => expect(mocks.getCollections).toHaveBeenCalledWith("/project"))
 
     expect(mocks.listCmsEntries).not.toHaveBeenCalled()
+  })
+
+  it("hydrates an existing multiline text binding and resolves its preview", async () => {
+    mocks.getCollections.mockResolvedValue({
+      collections: [{
+        id: "site-copy",
+        name: "site-copy",
+        label: "Site Copy",
+        schema: { fields: [{ key: "description", label: "Description", type: "text" }] },
+      }],
+    })
+    mocks.listCmsEntries.mockResolvedValue({
+      items: [{
+        entry: { id: "hero-id", version: "v1" },
+        locales: [{
+          locale: "en",
+          slug: "hero",
+          title: "Hero",
+          frontmatter: { description: "Build pages on a visual canvas." },
+          body: null,
+          isSource: true,
+        }],
+      }],
+    })
+    const host = mountSection({
+      imports: [],
+      extraFrontmatter: `/* @aria-cms-query:site-copy-hero */
+const heroCopy = (await getCollection("site-copy"))
+  .find((entry) => (entry.data.slug ?? entry.id) === "hero");
+/* @aria-cms-query-end:site-copy-hero */`,
+      nodes: [{
+        id: "description",
+        kind: "element",
+        name: "p",
+        props: { class: { type: "string", value: "hero__lede" } },
+        children: [
+          { id: "before", kind: "text", value: "\n  " },
+          {
+            id: "copy",
+            kind: "expr",
+            value: '{heroCopy?.data?.["description"] ?? /* @aria-cms-fallback */ "Fallback"}',
+          },
+          { id: "after", kind: "text", value: "\n" },
+        ],
+      }],
+      propSchema: [],
+      slots: [],
+      extendsTag: null,
+    })
+
+    await vi.waitFor(() => expect(host.textContent).toContain("Build pages on a visual canvas."))
+    expect(host.textContent).toContain("Description")
+    expect(host.textContent).not.toContain("Target prop")
+    expect(host.textContent).not.toContain("hero-id")
   })
 })

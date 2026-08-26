@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import { AppIcon } from "@/components/ui/app-icon"
-import { Badge } from "@/components/ui/badge"
 import { Card, CardDescription, CardFooter, CardTitle } from "@/components/ui/card"
 import { m } from "@/paraglide/messages.js"
 import { collectionKindIcon } from "../lib/collectionKindOptions"
@@ -19,21 +18,6 @@ const emit = defineEmits<{
 const updatedLabel = computed(() =>
   formatCmsRelativeTime(props.collection.updatedAt),
 )
-
-const kindDotColor = computed((): string => {
-  switch (props.collection.kind) {
-    case "content":
-      return "var(--published)"
-    case "data":
-      return "var(--primary)"
-    case "config":
-      return "var(--draft)"
-    case "tags":
-      return "var(--modified)"
-    default:
-      return "var(--muted-foreground)"
-  }
-})
 
 const itemCountLabel = computed(() => {
   if (!props.collection.countAvailable) return "Entries unavailable"
@@ -60,22 +44,11 @@ const itemCountLabel = computed(() => {
           class="text-muted-foreground"
         />
       </div>
-      <div class="absolute start-3 top-3 z-30 flex items-center gap-1.5 rounded-md border border-border/50 bg-background/90 px-2 py-0.5 backdrop-blur-sm">
-        <span
-          class="size-1.5 shrink-0 rounded-full"
-          :style="{ backgroundColor: kindDotColor }"
-          aria-hidden="true"
-        />
+      <div class="absolute inset-s-3 top-3 z-30 flex items-center gap-2 rounded-sm border border-border/50 bg-sidebar/90 px-2 py-1 backdrop-blur-sm">
         <span class="text-2xs capitalize text-muted-foreground">
           {{ collection.kind }}
         </span>
       </div>
-      <Badge
-        variant="secondary"
-        class="absolute end-3 top-3 z-30 max-w-[60%] truncate bg-background/90 text-2xs backdrop-blur-sm"
-      >
-        {{ collection.sourceLabel }}
-      </Badge>
     </div>
 
     <CardFooter class="flex-col items-stretch gap-2 px-3.5 pb-3.5 pt-3">

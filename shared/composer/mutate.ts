@@ -1323,8 +1323,8 @@ export function setComposerLayerLabelAtPath(
     return { ok: false, selectPath: path, reason: "Layer name must be 100 characters or fewer" };
   }
   const loc = locateAtPath(model.nodes, path);
-  if (!loc || loc.node.kind !== "element") {
-    return { ok: false, selectPath: path, reason: "Only HTML element layers can be renamed" };
+  if (!loc || (loc.node.kind !== "element" && loc.node.kind !== "component")) {
+    return { ok: false, selectPath: path, reason: "Only HTML element and component layers can be renamed" };
   }
   return setPropAtPath(
     model,

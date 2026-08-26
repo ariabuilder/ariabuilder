@@ -2,11 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { BrowserWindow, type BrowserWindow as BrowserWindowType } from "./electron-api";
-import { isNavigablePageRoute } from "../shared/pages";
 import {
   COMPONENT_THUMB_VERSION,
   ensureComponentPreviewHarness,
-  isAriaManagedRoute,
 } from "./componentPreviewHarness";
 import {
   LAYOUT_PREVIEW_ROUTE,
@@ -19,6 +17,10 @@ import {
   COMPONENT_PREVIEW_PAINT_SCRIPT,
   componentPreviewReadyScript,
 } from "./thumbs/componentPreviewUrl";
+import {
+  buildPagePreviewUrl,
+  resolvePageThumbTarget,
+} from "./thumbs/pagePreviewUrl";
 import { prioritizeWarmQueue } from "./thumbs/warmQueue";
 
 export type CaptureViewport = {
@@ -61,6 +63,7 @@ export type WarmLayoutsResult = WarmPagesResult;
 type PageThumbMeta = {
   route: string;
   mtimeMs: number | null;
+  cacheKey?: string | null;
   capturedAt: number;
   /** Capture semantics version. Older captures are regenerated in place. */
   version: number;
@@ -76,6 +79,8 @@ type ComponentThumbMeta = {
 
 type WarmPage = {
   route: string;
+  previewRoute?: string | null;
+  cacheKey?: string | null;
   mtimeMs?: number | null;
 };
 
@@ -163,14 +168,6 @@ function notifyLayoutThumbReady(projectPath: string, id: string): void {
   }
 }
 
-function isWarmableRoute(route: string): boolean {
-  // Skip Astro dynamic segments — they 404 without params.
-  if (!isNavigablePageRoute(route)) return false;
-  // Skip Aria-managed harness pages (not user content).
-  if (isAriaManagedRoute(route)) return false;
-  return true;
-}
-
 function isSafeComponentId(id: string): boolean {
   const normalized = id.trim().replace(/\\/g, "/");
   if (!normalized.startsWith("src/components/")) return false;
@@ -187,25 +184,6 @@ function isAllowedPreviewBase(url: string): boolean {
     );
   } catch {
     return false;
-  }
-}
-
-function pagePreviewUrl(baseUrl: string, route: string): string | null {
-  try {
-    const url = new URL(baseUrl);
-    if (
-      url.protocol !== "http:" ||
-      !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
-    ) {
-      return null;
-    }
-    const pathname = route.trim() || "/";
-    url.pathname = pathname.startsWith("/") ? pathname : `/${pathname}`;
-    url.search = "";
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return null;
   }
 }
 
@@ -409,6 +387,7 @@ function writePageThumbPng(
   route: string,
   png: Buffer,
   mtimeMs?: number | null,
+  cacheKey?: string | null,
 ): void {
   const pagePaths = pageThumbPaths(userData, projectPath, route);
   fs.mkdirSync(pagePaths.dir, { recursive: true });
@@ -417,6 +396,7 @@ function writePageThumbPng(
     route,
     mtimeMs:
       typeof mtimeMs === "number" && Number.isFinite(mtimeMs) ? mtimeMs : null,
+    cacheKey: typeof cacheKey === "string" ? cacheKey : null,
     capturedAt: Date.now(),
     version: PAGE_THUMB_VERSION,
   };
@@ -477,6 +457,7 @@ function pageThumbIsFresh(
   projectPath: string,
   route: string,
   mtimeMs?: number | null,
+  cacheKey?: string | null,
 ): boolean {
   const paths = pageThumbPaths(
     userData,
@@ -486,6 +467,7 @@ function pageThumbIsFresh(
   if (!fs.existsSync(paths.png)) return false;
   const meta = readPageMeta(paths.meta);
   if (!meta || meta.version !== PAGE_THUMB_VERSION) return false;
+  if (typeof cacheKey === "string") return meta.cacheKey === cacheKey;
   if (typeof mtimeMs !== "number" || !Number.isFinite(mtimeMs)) return true;
   return meta.mtimeMs === mtimeMs;
 }
@@ -733,7 +715,7 @@ export async function captureThumbs(
   const projectPath = opts.projectPath.trim();
   const route = (opts.route.trim() || "/") as string;
   if (!projectPath) return { ok: false, error: "Project path is required" };
-  const url = pagePreviewUrl(opts.baseUrl, route);
+  const url = buildPagePreviewUrl(opts.baseUrl, route);
   if (!url) return { ok: false, error: "Preview URL is invalid" };
 
   const viewport = {
@@ -1014,16 +996,17 @@ export async function warmPageThumbs(
       if (job.cancelled || warmJob !== job) {
         return { captured, skipped, cancelled: true };
       }
-      const route = (page.route?.trim() || "/") as string;
-      if (!isWarmableRoute(route)) {
+      const target = resolvePageThumbTarget(page);
+      if (!target) {
         skipped += 1;
         continue;
       }
-      if (pageThumbIsFresh(userData, projectPath, route, page.mtimeMs)) {
+      const { route, previewRoute } = target;
+      if (pageThumbIsFresh(userData, projectPath, route, page.mtimeMs, page.cacheKey)) {
         skipped += 1;
         continue;
       }
-      const url = pagePreviewUrl(baseUrl, route);
+      const url = buildPagePreviewUrl(baseUrl, previewRoute);
       if (!url) {
         skipped += 1;
         continue;
@@ -1038,7 +1021,7 @@ export async function warmPageThumbs(
         const image = await win.webContents.capturePage();
         if (isBlankCapture(image)) continue;
         const png = image.resize({ width: 640 }).toPNG();
-        writePageThumbPng(userData, projectPath, route, png, page.mtimeMs);
+        writePageThumbPng(userData, projectPath, route, png, page.mtimeMs, page.cacheKey);
         captured += 1;
       } catch {
         if (job.cancelled || warmJob !== job) {
@@ -1203,15 +1186,17 @@ export async function warmLayoutThumbs(
       if (job.cancelled || warmJob !== job) {
         return { captured, skipped, cancelled: true };
       }
-      const route = page.route?.trim() || "/";
-      if (
-        !isWarmableRoute(route) ||
-        pageThumbIsFresh(userData, projectPath, route, page.mtimeMs)
-      ) {
+      const target = resolvePageThumbTarget(page);
+      if (!target) {
         skipped += 1;
         continue;
       }
-      const url = pagePreviewUrl(baseUrl, route);
+      const { route, previewRoute } = target;
+      if (pageThumbIsFresh(userData, projectPath, route, page.mtimeMs, page.cacheKey)) {
+        skipped += 1;
+        continue;
+      }
+      const url = buildPagePreviewUrl(baseUrl, previewRoute);
       if (!url) {
         skipped += 1;
         continue;
@@ -1233,6 +1218,7 @@ export async function warmLayoutThumbs(
           route,
           image.resize({ width: 640 }).toPNG(),
           page.mtimeMs,
+          page.cacheKey,
         );
         captured += 1;
       } catch {

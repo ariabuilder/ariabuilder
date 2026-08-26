@@ -13,6 +13,7 @@ import type {
   ScanComponent,
   ScanPage,
   WorkspaceActiveDocument,
+  WorkspaceComposerCanvasTarget,
 } from "@/workspace/types"
 import type { ProjectRuntimeSession } from "@/lib/sessions"
 import type { AstroCollectionBinding, AstroDocumentModel } from "../../../shared/composer/types"
@@ -73,6 +74,7 @@ import {
 } from "./useComposerDocument"
 import { useComposerCodeSession } from "./useComposerCodeSession"
 import { useComposerPreviewCoordinator } from "./useComposerPreviewCoordinator"
+import { provideComposerCanvasTextDraft } from "./useComposerCanvasTextDraft"
 import { useAgentComposerHost } from "./useAgentComposerHost"
 import {
   clearAgentSurfaceContext,
@@ -170,6 +172,8 @@ function onComposerScroll(event: Event) {
 const emit = defineEmits<{
   "exit-standalone": []
   "active-document-change": [document: WorkspaceActiveDocument | null]
+  "edit-trail-change": [trail: WorkspaceActiveDocument[]]
+  "canvas-targets-change": [targets: WorkspaceComposerCanvasTarget[]]
   "device-change": [device: DevicePreview]
   "preview-immersive-change": [immersive: boolean]
 }>()
@@ -198,7 +202,12 @@ function openDesignTools() {
   inspectorRef.value?.openDesignTools()
 }
 
-defineExpose({ openDesignTools })
+defineExpose({
+  openDesignTools,
+  closeDrillLevel,
+  goToStackIndex,
+  openComposerCanvasTarget,
+})
 
 const pathClasses = ref<Record<string, string[][]>>({})
 provideComposerBridgeClasses({ pathClasses })
@@ -344,6 +353,7 @@ const codeLayout = ref<ComposerCodeLayout>(
 const editStack = useComposerEditStack()
 const componentPreviewSession = ref<ComposerComponentPreviewSession | null>(null)
 const cmsEntryTemplatePreview = ref<ComposerCmsEntryTemplatePreviewContext | null>(null)
+const canvasTextDraft = provideComposerCanvasTextDraft()
 const hardReloadRevision = ref(0)
 
 watch(
@@ -355,6 +365,18 @@ watch(
       name: entry.name,
       file: entry.file,
     })
+  },
+  { immediate: true },
+)
+
+watch(
+  () => editStack.stack.value,
+  (stack) => {
+    emit("edit-trail-change", stack.map((entry) => ({
+      kind: entry.kind,
+      name: entry.name,
+      file: entry.file,
+    })))
   },
   { immediate: true },
 )
@@ -591,7 +613,11 @@ function filterLayerRows(rows: ComposerLayerRow[]): ComposerLayerRow[] {
       row.synthetic &&
       row.treeKey.startsWith("slot-group:")
     ) return children.map((child) => ({ ...child, draggable: false }))
-    return [{ ...row, children }]
+    const draft = canvasTextDraft.session.value
+    const label = draft?.visibleOwnerPath === row.path
+      ? (draft.draft.length > 30 ? `${draft.draft.slice(0, 29)}…` : draft.draft || "Text")
+      : row.label
+    return [{ ...row, label, children }]
   })
 }
 
@@ -602,6 +628,94 @@ const visibleLayerTree = computed(() => ({
     ? filterLayerRows(layerTree.value.document)
     : [],
 }))
+
+const composerCanvasRows = ref<ComposerLayerRow[]>([])
+
+watch(
+  [activeLayerTree, () => editStack.current.value],
+  ([tree, current]) => {
+    if (!current) {
+      composerCanvasRows.value = []
+      return
+    }
+    const root = editStack.stack.value[0]
+    // While drilling, retain the page-wide snapshot so Quick Open continues
+    // to represent the rendered canvas rather than only the loaded leaf file.
+    if (root?.kind === "page" && current.kind !== "page") return
+
+    const attachOwnerAddress = (row: ComposerLayerRow): ComposerLayerRow => ({
+      ...row,
+      address: row.address ?? { file: current.file, path: row.path },
+      children: row.children.map(attachOwnerAddress),
+    })
+    composerCanvasRows.value = filterLayerRows(tree.content).map(attachOwnerAddress)
+  },
+  { immediate: true },
+)
+
+const composerCanvasTargetProjection = computed(() => {
+  const rows = new Map<string, ComposerLayerRow>()
+  const targets: WorkspaceComposerCanvasTarget[] = []
+  const rootName = editStack.stack.value[0]?.name ?? "Canvas"
+  const current = editStack.current.value
+  const layoutFiles = new Set((props.layouts ?? []).map((item) => item.file.replace(/\\/g, "/")))
+
+  function visit(layerRows: ComposerLayerRow[], ancestors: string[]) {
+    for (const row of layerRows) {
+      const isCanvasTarget =
+        row.kind === "component" &&
+        !row.synthetic &&
+        !row.presentationOnly &&
+        !row.activeDocumentRoot
+      const nextAncestors = isCanvasTarget ? [...ancestors, row.label] : ancestors
+      if (isCanvasTarget) {
+        const addressFile = row.address?.file?.replace(/\\/g, "/")
+        const rowPath = bareMarkerPath(row.address?.path ?? row.path)
+        const currentPath = current?.hostPath ? bareMarkerPath(current.hostPath) : null
+        const kind = row.pageLayout || (addressFile && layoutFiles.has(addressFile))
+          ? "layout" as const
+          : "component" as const
+        rows.set(row.treeKey, row)
+        targets.push({
+          id: row.treeKey,
+          kind,
+          label: row.label,
+          detail: [rootName, ...nextAncestors].join(" › "),
+          current: Boolean(
+            current &&
+            current.kind !== "page" &&
+            currentPath === rowPath &&
+            (!current.parentFile || current.parentFile.replace(/\\/g, "/") === addressFile) &&
+            (current.occurrence ?? 0) === (row.instance?.occurrence ?? 0),
+          ),
+        })
+      }
+      visit(row.children, nextAncestors)
+    }
+  }
+
+  visit(composerCanvasRows.value, [])
+
+  const labelCounts = new Map<string, number>()
+  for (const target of targets) {
+    labelCounts.set(target.label, (labelCounts.get(target.label) ?? 0) + 1)
+  }
+  const labelOccurrences = new Map<string, number>()
+  for (const target of targets) {
+    if ((labelCounts.get(target.label) ?? 0) < 2) continue
+    const occurrence = (labelOccurrences.get(target.label) ?? 0) + 1
+    labelOccurrences.set(target.label, occurrence)
+    target.detail = `${target.detail} · instance ${occurrence}`
+  }
+
+  return { rows, targets }
+})
+
+watch(
+  () => composerCanvasTargetProjection.value.targets,
+  (targets) => emit("canvas-targets-change", targets),
+  { immediate: true },
+)
 
 /** Inline editing keeps the page route; standalone components use the injected route. */
 const canvasRoute = computed(() =>
@@ -772,6 +886,9 @@ const {
   setSelectedProp,
   renameSelectedProp,
   setSelectedText,
+  beginCanvasTextEdit,
+  updateCanvasTextEdit,
+  finishCanvasTextEdit,
   setSelectedTag,
   commitStylesheetEdit,
   commitModelWithStylesheet,
@@ -783,6 +900,8 @@ const {
   model,
   editable: isEditable,
   designActive: isDesignMode,
+  exactSource: codeSession.appliedSource,
+  onExactSourcePersisted: codeSession.markVisualSourcePersisted,
   stagedSource,
   codeDirty: codeSession.dirty,
   onStagedSourceChange: codeSession.updateSourceFromVisualMutation,
@@ -790,10 +909,15 @@ const {
   draftHistoryBlocked: codeSession.hasStagedStylesheets,
   previewRevision: previewCoordinator.revision,
   reservePreviewRevision: previewCoordinator.reserveRevision,
-  onModelMutation: (before, after, reservedRevision) => previewCoordinator.applyModelMutation(
+  onModelMutation: (before, after, reservedRevision, exactSource, inlineTextOrigin) => previewCoordinator.applyModelMutation(
     before,
     after,
-    { writeDraft: stagedSource.value == null, revision: reservedRevision },
+    {
+      writeDraft: stagedSource.value == null,
+      revision: reservedRevision,
+      source: exactSource,
+      inlineTextOrigin,
+    },
   ),
   onPersisted: (result) => {
     if (result.runtimeAssetsChanged && model.value) {
@@ -942,6 +1066,7 @@ onUnmounted(() => {
 
 provideComposerDocument({
   model,
+  exactSource: codeSession.appliedSource,
   editable: interactionEditable,
   mutationPending,
   designActive: isDesignMode,
@@ -953,6 +1078,8 @@ provideComposerDocument({
   ),
   pages: computed(() => props.pages),
   documentKind: computed(() => editStack.current.value?.kind ?? "page"),
+  instanceChain: computed(() => editStack.current.value?.instanceChain ?? []),
+  cmsEntryTemplatePreview,
   mutateModel,
   commitModelMutation,
   withMutationLock,
@@ -965,9 +1092,15 @@ provideComposerDocument({
   popoverPreviewTargetId,
   previewPopover,
   reloadPreview: () => { hardReloadRevision.value += 1 },
+  reloadDocument: async () => {
+    if (editFile.value) await loadEditFile(editFile.value, { force: true })
+  },
   setSelectedProp,
   renameSelectedProp,
   setSelectedText,
+  beginCanvasTextEdit,
+  updateCanvasTextEdit,
+  finishCanvasTextEdit,
   setSelectedTag,
   commitStylesheetEdit,
   commitModelWithStylesheet,
@@ -1669,30 +1802,89 @@ async function openOwnedStructureRow(row: ComposerLayerRow): Promise<boolean> {
     hostPath: path,
     name: node.name,
     kindHint,
-    occurrence: 0,
-    parentChain: editStack.current.value?.instanceChain ?? [],
+    occurrence: row.instance?.occurrence ?? 0,
+    parentChain: row.instance?.chain ?? editStack.current.value?.instanceChain ?? [],
   })
 }
 
-async function onStructureOpen(row: ComposerLayerRow) {
+async function onStructureOpen(row: ComposerLayerRow): Promise<boolean> {
   const address = row.address
   if (address && address.file !== editFile.value) {
-    await onStructureNavigate(row, true)
-    return
+    return onStructureNavigate(row, true)
   }
-  await openOwnedStructureRow(row)
+  return openOwnedStructureRow(row)
 }
 
-async function onStructureNavigate(row: ComposerLayerRow, open = false) {
+async function openCanvasTargetThroughInstanceChain(row: ComposerLayerRow): Promise<boolean> {
+  const address = row.address
+  const chain = row.instance?.chain ?? []
+  if (!address || !chain.length) return false
+  const rootIndex = editStack.stack.value.findIndex(
+    (entry) => entry.file.replace(/\\/g, "/") === chain[0]?.ownerFile.replace(/\\/g, "/"),
+  )
+  if (rootIndex < 0 || !(await canNavigateFromActiveDocument())) return false
+  const root = editStack.goTo(rootIndex)
+  if (!root) return false
+  await loadEditFile(root.file)
+
+  for (const segment of chain) {
+    if (editFile.value === address.file) break
+    if (editFile.value?.replace(/\\/g, "/") !== segment.ownerFile.replace(/\\/g, "/")) {
+      return false
+    }
+    const node = model.value
+      ? nodeAtMarkerPath(model.value.nodes, bareMarkerPath(segment.hostPath))
+      : null
+    if (!node || node.kind !== "component") return false
+    const opened = await drillIntoNode({
+      hostPath: segment.hostPath,
+      name: node.name,
+      kindHint: node.id === "layout" || /layout/i.test(node.name) ? "layout" : "component",
+      occurrence: segment.occurrence,
+      parentChain: editStack.current.value?.instanceChain ?? [],
+    })
+    if (!opened) return false
+  }
+
+  return editFile.value === address.file
+    ? openOwnedStructureRow({ ...row, contextOnly: false })
+    : false
+}
+
+async function openComposerCanvasTarget(id: string): Promise<boolean> {
+  const row = composerCanvasTargetProjection.value.rows.get(id)
+  if (!row) {
+    toast.error("Could not open component", {
+      description: "This component is no longer on the canvas.",
+    })
+    return false
+  }
+  const address = row.address
+  if (address && address.file !== editFile.value) {
+    const index = editStack.stack.value.findIndex((entry) => entry.file === address.file)
+    if (index >= 0) {
+      if (!(await canNavigateFromActiveDocument())) return false
+      const next = editStack.goTo(index)
+      if (!next) return false
+      await loadEditFile(next.file)
+      return openOwnedStructureRow({ ...row, contextOnly: false })
+    }
+    if (row.instance?.chain.length) {
+      return openCanvasTargetThroughInstanceChain(row)
+    }
+  }
+  return onStructureOpen(row)
+}
+
+async function onStructureNavigate(row: ComposerLayerRow, open = false): Promise<boolean> {
   if (row.synthetic && row.insertTarget && row.treeKey.startsWith("slot-group:")) {
     activatePageSlot(row.slotName ?? null, row.insertTarget)
-    return
+    return true
   }
   const address = row.address
   if (!address || address.file === editFile.value) {
     if (open && row.kind === "component") {
-      await openOwnedStructureRow(row)
-      return
+      return openOwnedStructureRow(row)
     }
     if (!row.synthetic) {
       beacon.illuminate(row.path, {
@@ -1700,7 +1892,7 @@ async function onStructureNavigate(row: ComposerLayerRow, open = false) {
         source: "structure",
       })
     }
-    return
+    return true
   }
   if (
     address.file === pageLayoutFile.value &&
@@ -1720,7 +1912,7 @@ async function onStructureNavigate(row: ComposerLayerRow, open = false) {
           toast.error("Could not open component", {
             description: "The page layout invocation is no longer available.",
           })
-          return
+          return false
         }
         const layoutOpened = await drillIntoNode({
           hostPath: layoutPath,
@@ -1729,9 +1921,8 @@ async function onStructureNavigate(row: ComposerLayerRow, open = false) {
           occurrence: 0,
           parentChain: editStack.current.value?.instanceChain ?? [],
         })
-        if (!layoutOpened || editFile.value !== address.file) return
-        await openOwnedStructureRow({ ...row, contextOnly: false })
-        return
+        if (!layoutOpened || editFile.value !== address.file) return false
+        return openOwnedStructureRow({ ...row, contextOnly: false })
       }
       const importSpec = contextualNode.kind === "component"
         ? pageLayoutModel.value.imports.find(
@@ -1745,7 +1936,7 @@ async function onStructureNavigate(row: ComposerLayerRow, open = false) {
         node: contextualNode,
         importSpec,
       })
-      return
+      return true
     }
   }
   const index = editStack.stack.value.findIndex((entry) => entry.file === address.file)
@@ -1753,19 +1944,20 @@ async function onStructureNavigate(row: ComposerLayerRow, open = false) {
     toast.error("Could not open component", {
       description: `${row.label} belongs to context that is not in the current editing trail.`,
     })
-    return
+    return false
   }
-  if (!(await canNavigateFromActiveDocument())) return
+  if (!(await canNavigateFromActiveDocument())) return false
   const next = editStack.goTo(index)
-  if (!next) return
+  if (!next) return false
   await loadEditFile(next.file)
   if (open && row.kind === "component") {
-    await openOwnedStructureRow({ ...row, contextOnly: false })
-    return
+    return openOwnedStructureRow({ ...row, contextOnly: false })
   }
   if (nodeAtMarkerPath(model.value?.nodes ?? [], address.path)) {
     beacon.illuminate(address.path, { source: "structure" })
+    return true
   }
+  return false
 }
 
 async function applyDocumentLaunch(req: ComposerDocumentLaunchRequest) {
@@ -1826,6 +2018,17 @@ function selectCmsPreviewEntry(entryId: string) {
     ...context,
     selectedEntryId: entry.id,
     previewRoute: entry.route,
+  }
+}
+
+function updateCmsPreviewEntry(payload: { entryId: string; title?: string }) {
+  const context = cmsEntryTemplatePreview.value
+  if (!context) return
+  cmsEntryTemplatePreview.value = {
+    ...context,
+    entries: context.entries.map((entry) => entry.id === payload.entryId
+      ? { ...entry, ...(payload.title !== undefined ? { title: payload.title } : {}) }
+      : entry),
   }
 }
 
@@ -2194,8 +2397,6 @@ onUnmounted(() => {
         :save-blocked="Boolean(saveConflict)"
         :save-conflict="conflictDismissed ? null : saveConflict"
         :save-error="saveConflict ? null : saveError"
-        :edit-stack="editStack.stack.value"
-        :standalone="editStack.isStandalone.value"
         :component-preview-session="componentPreviewSession"
         :cms-entry-template-preview="cmsEntryTemplatePreview"
         :cms-list-collection-label="cmsListCollectionLabel"
@@ -2219,8 +2420,6 @@ onUnmounted(() => {
         @device-change="emit('device-change', $event)"
         @reload-preview="hardReloadRevision += 1"
         @select-translation-locale="activeTranslationLocale = $event"
-        @back="closeDrillLevel"
-        @crumb="goToStackIndex"
         @reload-conflict="reloadAfterConflict"
         @dismiss-conflict="conflictDismissed = true"
         @update-preview-data="updateComponentPreviewData"
@@ -2302,6 +2501,7 @@ onUnmounted(() => {
                 :design-mode="true"
                 :canvas-active="showStage && !isPreviewImmersive && active !== false"
                 :font-stylesheet-urls="composerFontStylesheetUrlsValue"
+                :cms-entry-template-preview="cmsEntryTemplatePreview"
                 :path-scope="editStack.pathScope.value"
                 :focus-path="editStack.focusPath.value"
                 :empty-document="interactionEditable && (model?.nodes.length ?? 0) === 0"
@@ -2315,6 +2515,7 @@ onUnmounted(() => {
                 @patch-result="previewCoordinator.onPatchResult"
                 @reconcile-result="previewCoordinator.onReconcileResult"
                 @hard-reload="hardReloadRevision += 1"
+                @cms-entry-updated="updateCmsPreviewEntry"
               />
               <ComposerBreakpointBoard
                 v-if="showStage && isPreviewImmersive"

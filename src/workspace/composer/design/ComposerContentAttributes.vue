@@ -1,19 +1,25 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { AppIcon } from "@/components/ui/app-icon"
 import { IconPickerDialog } from "@/components/ui/icon-picker"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { MediaAsset, MediaAssetType } from "@/lib/media"
+import { getCmsEntry, updateCmsEntry } from "@/lib/cms"
+import { getCollections } from "@/lib/workspace"
+import { confirm } from "@/composables/useConfirm"
 import { m } from "@/paraglide/messages.js"
 import MediaPickerDialog from "@/workspace/studio/media/components/MediaPickerDialog.vue"
-import { containsDynamicAstroContent, applyComposerIconElement, isComposerAlertNode, isComposerBadgeNode, isComposerButtonNode, nodeAtMarkerPath, resolveComposerAvatarParts, resolveElementInspectorTarget, stringFieldDisplay } from "../../../../shared/composer"
+import { containsDynamicAstroContent, applyComposerIconElement, cmsFieldPathLabel, isComposerAlertNode, isComposerBadgeNode, isComposerButtonNode, isWritableCmsTextOwner, nodeAtMarkerPath, replaceConnectedTextWithStatic, resolveComposerAvatarParts, resolveDirectCmsTextBinding, resolveElementInspectorTarget, stringFieldDisplay } from "../../../../shared/composer"
+import type { AriaEntryRecord } from "../../../../shared/cms"
 import type { EditableNode, PropValue } from "../../../../shared/composer/types"
 import { isComposerRichTextHost } from "../../../../shared/composer/richText"
 import { tryUseInspectorContext } from "../inspector/useInspectorContext"
 import { tryUseComposerModeNavigation } from "../useComposerModeNavigation"
+import { tryUseComposerCanvasTextDraft } from "../useComposerCanvasTextDraft"
 import InspectorPropertySection from "./InspectorPropertySection.vue"
 import ComposerRichTextEditor from "./ComposerRichTextEditor.vue"
 import ComposerButtonSection from "./ComposerButtonSection.vue"
@@ -41,6 +47,7 @@ const emit = defineEmits<{
 }>()
 const inspector = tryUseInspectorContext()
 const modeNavigation = tryUseComposerModeNavigation()
+const canvasTextDraft = tryUseComposerCanvasTextDraft()
 const mediaPickerOpen = ref(false)
 const iconPickerOpen = ref(false)
 const pickerField = ref<TypeField | null>(null)
@@ -73,11 +80,283 @@ const isInlineIcon = computed(() =>
   element.value && stringFieldDisplay(element.value.props?.["data-aria-type"]).text === "Icon",
 )
 const firstText = computed(() => {
+  const draft = canvasTextDraft?.session.value
+  if (draft && draft.visibleOwnerPath === inspector?.selectedPath.value) return draft.draft
   const children = element.value?.children
   return Array.isArray(children) && children.length === 1 && children[0]?.kind === "text"
     ? children[0].value
     : null
 })
+const directCmsText = computed(() => {
+  const model = inspector?.document.model.value
+  const path = inspector?.selectedPath.value
+  return model && path ? resolveDirectCmsTextBinding(model, path) : null
+})
+const cmsTextRecord = ref<AriaEntryRecord | null>(null)
+const cmsTextLocale = ref("")
+const cmsTextCollectionId = ref("")
+const cmsTextCollectionLabel = ref("")
+const cmsTextEntryLabel = ref("")
+const cmsTextEditField = ref("")
+const cmsTextDraft = ref("")
+const cmsTextLoading = ref(false)
+const cmsTextSaving = ref(false)
+const cmsTextError = ref("")
+const cmsTextNotice = ref("")
+let cmsTextGeneration = 0
+
+const cmsTextFieldLabel = computed(() => directCmsText.value?.field
+  ? cmsFieldPathLabel(directCmsText.value.field)
+  : "Content")
+const cmsTextMultiline = computed(() => {
+  const tag = element.value?.name.toLowerCase()
+  return cmsTextDraft.value.length > 80 || ["p", "blockquote", "figcaption", "dd"].includes(tag ?? "")
+})
+const cmsTextCanWriteOwner = computed(() => {
+  const binding = directCmsText.value
+  const model = inspector?.document.model.value
+  const context = inspector?.document.cmsEntryTemplatePreview?.value
+  const selectedEntry = context?.entries.find((entry) => entry.id === context.selectedEntryId)
+  if (!binding || binding.relation || !model || !selectedEntry) return false
+  return (
+    (selectedEntry.slug === binding.entrySlug || selectedEntry.id === binding.entrySlug) &&
+    isWritableCmsTextOwner(model, {
+      collection: binding.collection,
+      contextVariable: binding.contextVariable,
+      field: binding.field,
+      contentExposure: binding.contentExposure,
+    }, context)
+  )
+})
+
+function cmsLocale(record: AriaEntryRecord) {
+  return record.locales.find((locale) => locale.isSource) ?? record.locales[0] ?? null
+}
+
+function cmsTextValue(record: AriaEntryRecord, field: string): unknown {
+  const locale = cmsLocale(record)
+  if (!locale) return undefined
+  if (field === "title") return locale.title
+  if (field === "slug") return locale.slug
+  if (field === "body") return locale.body
+  return valueAtPath(locale.frontmatter, field)
+}
+
+function valueAtPath(value: unknown, path: string): unknown {
+  return path.split(".").filter(Boolean).reduce<unknown>((current, segment) => {
+    if (Array.isArray(current) && /^\d+$/.test(segment)) return current[Number(segment)]
+    return current && typeof current === "object" ? (current as Record<string, unknown>)[segment] : undefined
+  }, value)
+}
+
+function setValueAtPath(source: Record<string, unknown>, path: string, value: string): Record<string, unknown> {
+  const segments = path.split(".").filter(Boolean)
+  if (!segments.length) return source
+  const root = { ...source }
+  let current: Record<string, unknown> | unknown[] = root
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index]!
+    const key = Array.isArray(current) && /^\d+$/.test(segment) ? Number(segment) : segment
+    const existing: unknown = Array.isArray(current)
+      ? current[Number(key)]
+      : current[String(key)]
+    const next: Record<string, unknown> | unknown[] = Array.isArray(existing)
+      ? [...existing]
+      : existing && typeof existing === "object"
+        ? { ...(existing as Record<string, unknown>) }
+        : /^\d+$/.test(segments[index + 1] ?? "") ? [] : {}
+    ;(current as Record<string | number, unknown>)[key] = next
+    current = next
+  }
+  const last = segments.at(-1)!
+  const key = Array.isArray(current) && /^\d+$/.test(last) ? Number(last) : last
+  ;(current as Record<string | number, unknown>)[key] = value
+  return root
+}
+
+function relationIdentity(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>
+    return String(record.id ?? record.slug ?? record.ariaEntryId ?? "")
+  }
+  return value == null ? "" : String(value)
+}
+
+function cmsRecordValues(record: AriaEntryRecord, relationField?: string): Record<string, unknown> {
+  const locale = cmsLocale(record)
+  const values = { ...(locale?.frontmatter ?? {}) }
+  if (relationField && !relationField.includes(".")) {
+    const ids = (record.relations ?? [])
+      .filter((relation) => relation.fieldKey === relationField)
+      .sort((a, b) => a.position - b.position)
+      .map((relation) => relation.targetEntryId)
+    if (ids.length) values[relationField] = ids
+  }
+  return values
+}
+
+async function loadCmsText() {
+  const binding = directCmsText.value
+  const projectPath = inspector?.projectPath.value
+  const generation = ++cmsTextGeneration
+  cmsTextRecord.value = null
+  cmsTextLocale.value = ""
+  cmsTextCollectionId.value = ""
+  cmsTextCollectionLabel.value = ""
+  cmsTextEntryLabel.value = ""
+  cmsTextEditField.value = ""
+  cmsTextDraft.value = ""
+  cmsTextError.value = ""
+  cmsTextNotice.value = ""
+  if (!binding || !projectPath) return
+  cmsTextLoading.value = true
+  try {
+    const registry = await getCollections(projectPath)
+    const collection = registry.collections.find(
+      (item) => item.id === binding.collection || item.name === binding.collection,
+    )
+    if (!collection || collection.source && collection.source.kind !== "aria-managed") {
+      throw new Error("This value is not owned by Aria CMS.")
+    }
+    const ownerRecord = await getCmsEntry(projectPath, collection.id, binding.entrySlug)
+    if (generation !== cmsTextGeneration) return
+    let record = ownerRecord
+    let editableCollection = collection
+    let editableField = binding.field
+    if (record && binding.relation) {
+      const targetCollection = registry.collections.find(
+        (item) => item.id === binding.relation?.targetCollection || item.name === binding.relation?.targetCollection,
+      )
+      if (!targetCollection || targetCollection.source && targetCollection.source.kind !== "aria-managed") {
+        throw new Error("The related value is not owned by Aria CMS.")
+      }
+      const source = valueAtPath(cmsRecordValues(record, binding.relation.sourceField), binding.relation.sourceField)
+      const related = binding.relation.kind === "relation" && Array.isArray(source)
+        ? source[Math.max(0, binding.relation.index ?? 0)]
+        : source
+      const relatedId = relationIdentity(related)
+      if (!relatedId) throw new Error("The related CMS entry is unavailable.")
+      record = await getCmsEntry(projectPath, targetCollection.id, relatedId)
+      editableCollection = targetCollection
+      editableField = binding.relation.targetField
+    }
+    if (generation !== cmsTextGeneration) return
+    const locale = record && cmsLocale(record)
+    const value = record ? cmsTextValue(record, editableField) : undefined
+    if (!record || !locale || typeof value !== "string") {
+      throw new Error("The CMS text value could not be loaded.")
+    }
+    cmsTextRecord.value = record
+    cmsTextLocale.value = locale.locale
+    cmsTextCollectionId.value = editableCollection.id
+    cmsTextCollectionLabel.value = editableCollection.label ?? editableCollection.name
+    cmsTextEntryLabel.value = locale.title || record.entry.id
+    cmsTextEditField.value = editableField
+    cmsTextDraft.value = value
+  } catch (cause) {
+    if (generation === cmsTextGeneration) {
+      cmsTextError.value = cause instanceof Error ? cause.message : String(cause)
+    }
+  } finally {
+    if (generation === cmsTextGeneration) cmsTextLoading.value = false
+  }
+}
+
+watch(
+  () => [
+    inspector?.projectPath.value ?? "",
+    directCmsText.value?.collection ?? "",
+    directCmsText.value?.entrySlug ?? "",
+    directCmsText.value?.field ?? "",
+    directCmsText.value?.relation?.targetCollection ?? "",
+    directCmsText.value?.relation?.targetField ?? "",
+  ] as const,
+  () => void loadCmsText(),
+  { immediate: true },
+)
+
+async function saveCmsText() {
+  const binding = directCmsText.value
+  const record = cmsTextRecord.value
+  const locale = record && cmsLocale(record)
+  const projectPath = inspector?.projectPath.value
+  if (
+    !binding || !record || !locale || !projectPath || !cmsTextCollectionId.value ||
+    cmsTextSaving.value
+  ) return
+  const field = cmsTextEditField.value || binding.field
+  const previous = cmsTextValue(record, field)
+  if (cmsTextDraft.value === previous) return
+  const selectedPath = inspector?.selectedPath.value
+  const generation = cmsTextGeneration
+  cmsTextSaving.value = true
+  cmsTextError.value = ""
+  cmsTextNotice.value = ""
+  if (!cmsTextCanWriteOwner.value) {
+    const accepted = await confirm({
+      title: "Replace connected text?",
+      description: `This text comes from CMS field “${field}”. Replacing it in the Inspector removes that live connection and creates static text.`,
+      confirmLabel: "Replace with static text",
+      cancelLabel: "Keep connection",
+      destructive: true,
+    })
+    if (
+      generation !== cmsTextGeneration ||
+      inspector?.selectedPath.value !== selectedPath ||
+      directCmsText.value?.path !== binding.path
+    ) {
+      cmsTextSaving.value = false
+      return
+    }
+    if (!accepted) {
+      cmsTextDraft.value = String(previous ?? "")
+      cmsTextNotice.value = "The live connection was kept."
+      cmsTextSaving.value = false
+      return
+    }
+    const replacement = cmsTextDraft.value
+    const changed = Boolean(selectedPath) && inspector.document.commitInspectorMutation(
+      "Replace connected text",
+      (model) => replaceConnectedTextWithStatic(model, binding.path, replacement, selectedPath ?? binding.path),
+      { immediate: true, coalesceKey: null },
+    )
+    if (!changed) {
+      cmsTextDraft.value = String(previous ?? "")
+      cmsTextError.value = "The connected text could not be replaced."
+    }
+    cmsTextSaving.value = false
+    return
+  }
+  try {
+    const next = await updateCmsEntry(projectPath, {
+      collectionId: cmsTextCollectionId.value,
+      id: record.entry.id,
+      version: record.entry.version,
+      patch: {
+        upsertLocale: {
+          locale: locale.locale,
+          title: field === "title" ? cmsTextDraft.value : locale.title,
+          slug: field === "slug" ? cmsTextDraft.value : locale.slug,
+          frontmatter: field === "title" || field === "slug" || field === "body"
+            ? locale.frontmatter
+            : setValueAtPath(locale.frontmatter, field, cmsTextDraft.value),
+          body: field === "body" ? cmsTextDraft.value : locale.body,
+          isSource: locale.isSource,
+          status: locale.status,
+          publishedAt: locale.publishedAt,
+        },
+      },
+    })
+    cmsTextRecord.value = next
+    cmsTextLocale.value = cmsLocale(next)?.locale ?? cmsTextLocale.value
+    cmsTextNotice.value = "Saved to CMS"
+    inspector.document.reloadPreview()
+  } catch (cause) {
+    cmsTextError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    cmsTextSaving.value = false
+  }
+}
 const fallbackText = computed(() => {
   const children = avatarParts.value?.fallback?.node.children
   return Array.isArray(children) && children.length === 1 && children[0]?.kind === "text"
@@ -330,7 +609,48 @@ function setStyle(
     />
 
     <InspectorPropertySection
-      v-if="richTextElement && !buttonNode"
+      v-if="directCmsText"
+      :title="m.composer_inspector_section_content()"
+      :open="openSection === 'content'"
+      :has-changes="true"
+      @update:open="emit('update:openSection', $event ? 'content' : openSection === 'content' ? null : openSection ?? null)"
+    >
+      <div class="space-y-2">
+        <div class="flex items-center justify-between gap-2">
+          <Label for="composer-cms-content" class="text-[10px] uppercase tracking-wide text-muted-foreground">
+            {{ cmsTextFieldLabel }}
+          </Label>
+          <span class="text-[9px] text-muted-foreground">CMS</span>
+        </div>
+        <p v-if="cmsTextLoading" class="text-[11px] text-muted-foreground">Loading content…</p>
+        <template v-else-if="cmsTextRecord">
+          <Textarea
+            v-if="cmsTextMultiline"
+            id="composer-cms-content"
+            v-model="cmsTextDraft"
+            class="min-h-20 text-xs"
+            :disabled="disabled || cmsTextSaving"
+            @change="saveCmsText"
+          />
+          <Input
+            v-else
+            id="composer-cms-content"
+            v-model="cmsTextDraft"
+            class="h-8 text-xs"
+            :disabled="disabled || cmsTextSaving"
+            @change="saveCmsText"
+          />
+          <p class="text-[10px] text-muted-foreground">
+            {{ cmsTextCollectionLabel || directCmsText.collection }} · {{ cmsTextEntryLabel || directCmsText.entrySlug }} · {{ cmsTextLocale }}
+          </p>
+        </template>
+        <p v-if="cmsTextError" role="alert" class="text-[11px] text-destructive">{{ cmsTextError }}</p>
+        <p class="sr-only" role="status" aria-live="polite">{{ cmsTextNotice }}</p>
+      </div>
+    </InspectorPropertySection>
+
+    <InspectorPropertySection
+      v-else-if="richTextElement && !buttonNode"
       :title="m.composer_inspector_section_content()"
       :open="openSection === 'content'"
       :has-changes="contentHasChanges"

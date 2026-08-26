@@ -110,4 +110,28 @@ describe("InferenceCredentialFields", () => {
 
     expect(host.textContent).toContain("Remove spaces from the API key")
   })
+
+  it("rejects an OpenCode key label or other non-key value", async () => {
+    const host = mountCredentialFields()
+    const input = host.querySelector<HTMLInputElement>("input[type=password]")
+    expect(input).not.toBeNull()
+
+    if (input) {
+      input.value = "OpenCodeGo"
+      input.dispatchEvent(new Event("input", { bubbles: true }))
+      await nextTick()
+      input.dispatchEvent(new Event("blur"))
+    }
+    await nextTick()
+
+    expect(host.textContent).toContain("OpenCode API keys start with sk-")
+
+    const saveButton = Array.from(host.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Save key",
+    )
+    saveButton?.click()
+    await nextTick()
+
+    expect(mocks.setProviderCredentials).not.toHaveBeenCalled()
+  })
 })

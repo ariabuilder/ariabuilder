@@ -12,7 +12,6 @@ import { cn } from "@/lib/utils"
 import { m } from "@/paraglide/messages.js"
 import ViewportControls from "@/workspace/ViewportControls.vue"
 import type { DevicePreview } from "@/workspace/types"
-import type { ComposerEditStackEntry } from "../useComposerEditStack"
 import type {
   ComposerCodeLayout,
   ComposerSurfaceMode,
@@ -51,9 +50,6 @@ const props = withDefaults(
     saveConflict?: string | null
     /** Non-mtime save failure (shown when there is no disk conflict). */
     saveError?: string | null
-    /** Page → component drill trail (breadcrumb). */
-    editStack?: ComposerEditStackEntry[]
-    standalone?: boolean
     componentPreviewSession?: ComposerComponentPreviewSession | null
     cmsEntryTemplatePreview?: ComposerCmsEntryTemplatePreviewContext | null
     cmsListCollectionLabel?: string | null
@@ -76,8 +72,6 @@ const props = withDefaults(
     saveBlocked: false,
     saveConflict: null,
     saveError: null,
-    editStack: () => [],
-    standalone: false,
     componentPreviewSession: null,
     cmsEntryTemplatePreview: null,
     cmsListCollectionLabel: null,
@@ -109,8 +103,6 @@ const emit = defineEmits<{
   redo: []
   "device-change": [device: DevicePreview]
   "reload-preview": []
-  back: []
-  crumb: [index: number]
   "reload-conflict": []
   "dismiss-conflict": []
   "update-preview-data": [data: ComposerComponentPreviewData]
@@ -198,8 +190,6 @@ const codeLayouts: Array<{
 function activateCodeLayout(layout: ComposerCodeLayout) {
   emit("update:code-layout", layout)
 }
-
-const isDrilling = () => props.standalone || (props.editStack?.length ?? 0) > 1
 
 const saveStatus = computed(() => {
   if (props.saveBlocked) {
@@ -407,62 +397,6 @@ function onSaveClick() {
         <SelectItem v-for="locale in translationLocales" :key="locale" :value="locale">{{ locale }}</SelectItem>
       </SelectContent>
     </Select>
-
-    <!-- Drill-in breadcrumb / back -->
-    <div
-      v-if="isDrilling()"
-      class="flex min-w-0 max-w-[42%] items-center gap-0.5"
-      data-aria-composer-edit-stack
-    >
-      <Tooltip>
-        <TooltipTrigger as-child>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            class="size-6! shrink-0"
-            :aria-label="m.composer_drill_back()"
-            @click="emit('back')"
-          >
-            <AppIcon name="chevronLeft" :size="13" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>{{ m.composer_drill_back_hint() }}</TooltipContent>
-      </Tooltip>
-      <nav
-        class="flex min-w-0 items-center gap-0.5 overflow-hidden text-[11px]"
-        :aria-label="m.composer_drill_trail()"
-      >
-        <template v-for="(entry, i) in editStack" :key="`${entry.file}-${i}`">
-          <span
-            v-if="i > 0"
-            class="shrink-0 text-muted-foreground/50"
-            aria-hidden="true"
-          >/</span>
-          <button
-            type="button"
-            :class="
-              cn(
-                'min-w-0 truncate rounded-sm px-1 py-0.5 font-medium transition-colors',
-                i === editStack.length - 1
-                  ? 'text-foreground'
-                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-              )
-            "
-            :disabled="i === editStack.length - 1"
-            @click="emit('crumb', i)"
-          >
-            <AppIcon
-              v-if="entry.kind !== 'page'"
-              :name="entry.kind === 'layout' ? 'layouts' : 'component'"
-              :size="11"
-              class="mr-0.5 inline-block align-[-1px] opacity-70"
-            />
-            {{ entry.name }}
-          </button>
-        </template>
-      </nav>
-    </div>
 
     <div class="flex-1" />
 

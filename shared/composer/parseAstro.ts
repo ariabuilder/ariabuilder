@@ -18,6 +18,7 @@ import type {
   PropValue,
 } from "./types";
 import { parseManagedConditionExpression } from "../conditions/astro";
+import { decodeAstroText } from "./astroText";
 
 /** Mirrors @astrojs/compiler DiagnosticSeverity.Error (not re-exported from package entry). */
 const DIAGNOSTIC_ERROR = 1;
@@ -31,6 +32,7 @@ type PositionedCompilerNode = CompilerNode & {
 
 type ParseMappingContext = {
   nextId: number;
+  source: string;
   sourceByteToUtf16: number[];
 };
 
@@ -52,7 +54,7 @@ function createParseMappingContext(source: string): ParseMappingContext {
     utf16Offset += character.length;
     table[byteOffset] = utf16Offset;
   }
-  return { nextId: 1, sourceByteToUtf16: table };
+  return { nextId: 1, source, sourceByteToUtf16: table };
 }
 
 function makeId(context: ParseMappingContext): string {
@@ -71,6 +73,50 @@ function sourceRangeFor(
   const to = context.sourceByteToUtf16[Math.max(0, Math.floor(end!))];
   if (from == null || to == null || to < from) return undefined;
   return { from, to };
+}
+
+function exactExpressionRange(
+  context: ParseMappingContext,
+  node: CompilerNode,
+  value: string,
+  parentRange?: ComposerSourceRange,
+): ComposerSourceRange | undefined {
+  // Astro expression positions may start before `{` and end beyond the
+  // parent element. Locate the exact projected expression inside its parent.
+  const position = (node as PositionedCompilerNode).position;
+  const start = position?.start?.offset;
+  if (!Number.isFinite(start)) return undefined;
+  const compilerFrom = context.sourceByteToUtf16[Math.max(0, Math.floor(start!))];
+  if (compilerFrom == null) return undefined;
+
+  const searchFrom = Math.max(parentRange?.from ?? 0, compilerFrom);
+  const searchTo = Math.min(parentRange?.to ?? context.source.length, context.source.length);
+  const anchored: number[] = [];
+  let cursor = searchFrom;
+  while (cursor <= searchTo - value.length) {
+    const found = context.source.indexOf(value, cursor);
+    if (found < 0 || found + value.length > searchTo) break;
+    if (
+      found - compilerFrom <= 1 ||
+      !context.source.slice(compilerFrom, found).trim()
+    ) anchored.push(found);
+    cursor = found + Math.max(1, value.length);
+  }
+  if (anchored.length === 1) {
+    return { from: anchored[0]!, to: anchored[0]! + value.length };
+  }
+
+  const parentMatches: number[] = [];
+  cursor = parentRange?.from ?? 0;
+  while (cursor <= searchTo - value.length) {
+    const found = context.source.indexOf(value, cursor);
+    if (found < 0 || found + value.length > searchTo) break;
+    parentMatches.push(found);
+    cursor = found + Math.max(1, value.length);
+  }
+  return parentMatches.length === 1
+    ? { from: parentMatches[0]!, to: parentMatches[0]! + value.length }
+    : undefined;
 }
 
 const DEFAULT_IMPORT_RE =
@@ -255,9 +301,10 @@ function serializeCompilerAttrs(attrs: AttributeNode[]): string {
 function mapChildren(
   context: ParseMappingContext,
   nodes: CompilerNode[] | undefined,
+  parentRange?: ComposerSourceRange,
 ): EditableNode[] {
   const mapped = (nodes ?? [])
-    .map((n) => mapNode(context, n))
+    .map((n) => mapNode(context, n, parentRange))
     .filter((n): n is EditableNode => n != null);
   return trimStructuralWhitespace(context, mapped);
 }
@@ -455,6 +502,7 @@ function tryMapStructuredExpression(
 function mapExpression(
   context: ParseMappingContext,
   node: CompilerNode & { type: "expression" },
+  parentRange?: ComposerSourceRange,
 ): EditableNode {
   const structured = tryMapStructuredExpression(context, node.children ?? []);
   if (structured) {
@@ -463,11 +511,12 @@ function mapExpression(
   }
 
   const inner = (node.children ?? []).map(serializeExprChild).join("");
+  const value = `{${inner}}`;
   return {
     id: makeId(context),
     kind: "expr",
-    sourceRange: sourceRangeFor(context, node),
-    value: `{${inner}}`,
+    sourceRange: exactExpressionRange(context, node, value, parentRange),
+    value,
   };
 }
 
@@ -482,18 +531,19 @@ function mapTag(
 ): EditableNode {
   const props = mapAttributes(node.attributes);
   const name = node.name;
+  const sourceRange = sourceRangeFor(context, node);
 
   if (node.type === "element" && name === "slot") {
     const kids = node.children ?? [];
     return {
       id: makeId(context),
       kind: "slot",
-      sourceRange: sourceRangeFor(context, node),
+      sourceRange,
       props,
       children:
         kids.length === 0
           ? null
-          : mapChildren(context, kids),
+          : mapChildren(context, kids, sourceRange),
     };
   }
 
@@ -504,7 +554,7 @@ function mapTag(
     return {
       id: makeId(context),
       kind: "raw",
-      sourceRange: sourceRangeFor(context, node),
+      sourceRange,
       name,
       props,
       inner,
@@ -515,10 +565,10 @@ function mapTag(
     return {
       id: makeId(context),
       kind: "fragment",
-      sourceRange: sourceRangeFor(context, node),
+      sourceRange,
       name: name || "",
       props,
-      children: mapChildren(context, node.children),
+      children: mapChildren(context, node.children, sourceRange),
     };
   }
 
@@ -537,13 +587,13 @@ function mapTag(
     // Prefer self-closing for components; paired empty for HTML elements.
     children = isComponent ? null : [];
   } else {
-    children = mapChildren(context, kids);
+    children = mapChildren(context, kids, sourceRange);
   }
 
   return {
     id: makeId(context),
     kind,
-    sourceRange: sourceRangeFor(context, node),
+    sourceRange,
     name,
     props,
     children,
@@ -553,6 +603,7 @@ function mapTag(
 function mapNode(
   context: ParseMappingContext,
   node: CompilerNode,
+  parentRange?: ComposerSourceRange,
 ): EditableNode | null {
   switch (node.type) {
     case "frontmatter":
@@ -563,7 +614,7 @@ function mapNode(
         id: makeId(context),
         kind: "text",
         sourceRange: sourceRangeFor(context, node),
-        value: node.value,
+        value: decodeAstroText(node.value),
       };
     }
     case "comment":
@@ -581,7 +632,7 @@ function mapNode(
         value: node.value,
       };
     case "expression":
-      return mapExpression(context, node);
+      return mapExpression(context, node, parentRange);
     case "element":
     case "component":
     case "custom-element":

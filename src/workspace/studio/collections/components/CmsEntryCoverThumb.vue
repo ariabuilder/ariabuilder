@@ -45,8 +45,8 @@ const coverAlt = computed(
 
 const rootClass = computed(() =>
   props.variant === "card"
-    ? "absolute inset-0 grid place-items-center bg-muted/25"
-    : "grid h-6 w-9 place-items-center overflow-hidden rounded-sm bg-card/30",
+    ? "absolute inset-0 grid place-items-center bg-background"
+    : "grid h-6 w-9 place-items-center overflow-hidden rounded-sm bg-background",
 )
 
 const iconClass = computed(() =>

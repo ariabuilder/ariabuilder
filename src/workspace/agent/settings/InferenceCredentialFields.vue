@@ -109,6 +109,10 @@ function validateApiKey() {
     apiKeyError.value = "Remove spaces from the API key"
     return
   }
+  if (props.backendId === "opencode" && !trimmed.startsWith("sk-")) {
+    apiKeyError.value = "OpenCode API keys start with sk-"
+    return
+  }
   apiKeyError.value = null
 }
 

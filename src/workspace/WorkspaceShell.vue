@@ -7,7 +7,10 @@ import RailPlaceholder, {
 } from "@/workspace/RailPlaceholder.vue"
 import SettingsSurface from "@/workspace/settings/SettingsSurface.vue"
 import type { SiteSettings } from "@/workspace/settings/types"
-import type { ProjectRuntimeSession } from "@/lib/sessions"
+import {
+  onProjectChange,
+  type ProjectRuntimeSession,
+} from "@/lib/sessions"
 import {
   cancelWarmPageThumbs,
   warmComponentThumbs,
@@ -31,7 +34,9 @@ import type {
   DevicePreview,
   ProjectSession,
   ScanComponent,
+  ScanPage,
   WorkspaceActiveDocument,
+  WorkspaceComposerCanvasTarget,
   WorkspaceRailId,
 } from "@/workspace/types"
 import {
@@ -42,6 +47,7 @@ import type { DesignSectionId } from "@/workspace/design/types"
 import { useAgentSurfaceContext } from "@/workspace/agent/surfaceContext"
 import { useAgentWorkspaceHost } from "@/workspace/agent/useAgentWorkspaceHost"
 import { requestComposerDocumentLaunch } from "@/workspace/composer/composerDocumentLaunchRequest"
+import { resolveCmsEntryTemplatePreviewTarget } from "@/workspace/composer/cmsEntryTemplatePreview"
 import { agentToolFail, agentToolOk, type AgentToolResult } from "../../shared/agent"
 import type { StudioDocumentUsage } from "../../shared/types"
 
@@ -69,6 +75,8 @@ provideWorkspaceNavigate({
 })
 
 const activeComposerDocument = ref<WorkspaceActiveDocument | null>(null)
+const composerEditTrail = ref<WorkspaceActiveDocument[]>([])
+const composerCanvasTargets = ref<WorkspaceComposerCanvasTarget[]>([])
 const composerSurfaceRef = ref<InstanceType<typeof ComposerSurface> | null>(null)
 const composerPreviewImmersive = ref(false)
 const previewIsolatedDevice = ref<DevicePreview | null>(null)
@@ -83,6 +91,14 @@ function onPreviewIsolateChange(device: DevicePreview | null) {
 
 function openComposerDesignTools() {
   composerSurfaceRef.value?.openDesignTools()
+}
+
+async function selectComposerBreadcrumb(index: number) {
+  await composerSurfaceRef.value?.goToStackIndex(index)
+}
+
+async function openComposerCanvasTarget(id: string): Promise<boolean> {
+  return await composerSurfaceRef.value?.openComposerCanvasTarget(id) ?? false
 }
 
 const {
@@ -320,6 +336,26 @@ function clearComponentWarmTimer() {
   }
 }
 
+async function resolvePageThumbWarmList(
+  projectPath: string,
+  pages: readonly ScanPage[],
+) {
+  const resolved = await Promise.all(pages.map(async (page) => {
+    const base = { route: page.route, mtimeMs: page.mtimeMs }
+    if (page.role !== "cms-entry") return base
+    try {
+      const preview = await resolveCmsEntryTemplatePreviewTarget(
+        projectPath,
+        page,
+      )
+      return preview ? { ...base, ...preview } : null
+    } catch {
+      return null
+    }
+  }))
+  return resolved.filter((page) => page !== null)
+}
+
 function schedulePageThumbWarm() {
   clearPageWarmTimer()
   const runtime = props.runtime
@@ -368,37 +404,34 @@ function schedulePageThumbWarm() {
   // Let the Composer iframe settle before a hidden window starts walking routes.
   const projectPath = props.session.root
   const baseUrl = runtime.previewUrl
-  const pageList = (pages ?? []).map((p) => ({ route: p.route, mtimeMs: p.mtimeMs }))
+  const rail = props.session.rail
+  const sourcePages = [...(pages ?? [])]
   pageWarmTimer = setTimeout(() => {
     pageWarmTimer = null
-    if (props.active === false) return
-    if (props.runtime?.status !== "live") return
-    if (props.runtime.previewUrl !== baseUrl) return
-    if (
-      props.session.rail !== "composer" &&
-      props.session.rail !== "pages" &&
-      props.session.rail !== "layouts"
-    ) {
-      return
-    }
-    lastPageWarmKey = key
-    if (props.session.rail === "layouts") {
-      void warmLayoutThumbs({
-        projectPath,
-        baseUrl,
-        pages: pageList,
-        layouts: (props.session.scan?.layouts ?? []).map((layout) => ({
-          id: layout.id,
-          mtimeMs: layout.mtimeMs,
-        })),
-      }).catch(() => undefined)
-    } else {
-      void warmPageThumbs({
-        projectPath,
-        baseUrl,
-        pages: pageList,
-      }).catch(() => undefined)
-    }
+    void resolvePageThumbWarmList(projectPath, sourcePages).then((pageList) => {
+      if (props.active === false) return
+      if (props.runtime?.status !== "live") return
+      if (props.runtime.previewUrl !== baseUrl) return
+      if (props.session.root !== projectPath || props.session.rail !== rail) return
+      lastPageWarmKey = key
+      if (rail === "layouts") {
+        void warmLayoutThumbs({
+          projectPath,
+          baseUrl,
+          pages: pageList,
+          layouts: (props.session.scan?.layouts ?? []).map((layout) => ({
+            id: layout.id,
+            mtimeMs: layout.mtimeMs,
+          })),
+        }).catch(() => undefined)
+      } else {
+        void warmPageThumbs({
+          projectPath,
+          baseUrl,
+          pages: pageList,
+        }).catch(() => undefined)
+      }
+    }).catch(() => undefined)
   }, PAGE_WARM_DELAY_MS)
 }
 
@@ -485,7 +518,19 @@ watch(
   { immediate: true },
 )
 
+const stopPageThumbProjectChanges = onProjectChange((projectPath, change) => {
+  if (projectPath !== props.session.root) return
+  const changedPath = change.path?.replace(/\\/g, "/").toLowerCase() ?? ""
+  const changesCmsEntry =
+    change.category === "content" ||
+    changedPath.startsWith(".aria/cms/entries/")
+  if (!changesCmsEntry) return
+  lastPageWarmKey = ""
+  schedulePageThumbWarm()
+})
+
 onUnmounted(() => {
+  stopPageThumbProjectChanges()
   clearPageWarmTimer()
   clearComponentWarmTimer()
   lastPageWarmKey = ""
@@ -508,6 +553,10 @@ onUnmounted(() => {
         :on-select-project="onSelectProject"
         :on-open-project-window="onOpenProjectWindow"
         :on-open-composer-design-tools="openComposerDesignTools"
+        :composer-edit-trail="session.rail === 'composer' ? composerEditTrail : []"
+        :composer-canvas-targets="session.rail === 'composer' ? composerCanvasTargets : []"
+        :on-composer-breadcrumb-select="selectComposerBreadcrumb"
+        :on-open-composer-canvas-target="openComposerCanvasTarget"
         :on-toggle-agent="toggleAgentPanel"
         :agent-open="agentOpen"
         :show-composer-viewport-controls="session.rail === 'composer' && composerPreviewImmersive"
@@ -549,6 +598,8 @@ onUnmounted(() => {
             @preview-immersive-change="composerPreviewImmersive = $event"
             @exit-standalone="onSelectRail('components')"
             @active-document-change="activeComposerDocument = $event"
+            @edit-trail-change="composerEditTrail = $event"
+            @canvas-targets-change="composerCanvasTargets = $event"
           />
           <PagesSurface
             v-else-if="session.rail === 'pages'"

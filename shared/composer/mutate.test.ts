@@ -306,7 +306,11 @@ import Card from '../components/Card.astro';
   });
 
   it("persists a trimmed custom layer label on prop-bearing nodes", async () => {
-    const model = await editableModel(`<section><h2>Heading</h2></section>`);
+    const model = await editableModel(`---
+import Hero from "./Hero.astro";
+---
+<section><h2>Heading</h2></section>
+<Hero />`);
     expect(setComposerLayerLabelAtPath(model, "0", "  Campaign hero  ")).toMatchObject({
       ok: true,
       selectPath: "0",
@@ -314,9 +318,17 @@ import Card from '../components/Card.astro';
     expect(serializeAstro(model)).toContain('data-aria-layer-label="Campaign hero"');
     expect(setComposerLayerLabelAtPath(model, "0.0.0", "Text label")).toMatchObject({
       ok: false,
-      reason: "Only HTML element layers can be renamed",
+      reason: "Only HTML element and component layers can be renamed",
     });
+    expect(setComposerLayerLabelAtPath(model, "1", "Primary hero")).toMatchObject({
+      ok: true,
+      selectPath: "1",
+    });
+    expect(serializeAstro(model)).toContain('<Hero data-aria-layer-label="Primary hero" />');
     expect(setComposerLayerLabelAtPath(model, "0", "   ")).toMatchObject({ ok: true });
+    expect(serializeAstro(model)).not.toContain('<section data-aria-layer-label');
+    expect(serializeAstro(model)).toContain('<Hero data-aria-layer-label="Primary hero" />');
+    expect(setComposerLayerLabelAtPath(model, "1", "   ")).toMatchObject({ ok: true });
     expect(serializeAstro(model)).not.toContain("data-aria-layer-label");
   });
 

@@ -156,6 +156,19 @@ describe("useComposerCodeSession dirty baseline", () => {
     }
   })
 
+  it("advances the clean Code baseline after an exact visual write", async () => {
+    const code = session()
+    const before = "---\n---\n\n<h1>Astro</h1>\n"
+    const after = "---\n---\n\n<h1 title=\"Greeting\">Astro</h1>\n"
+    await code.loadDocument(editableResult(before), 1000)
+
+    code.markVisualSourcePersisted(after)
+
+    expect(code.appliedSource.value).toBe(after)
+    expect(code.workingSource.value).toBe(after)
+    expect(code.dirty.value).toBe(false)
+  })
+
   it("marks analysis checking when the code editor updates source", async () => {
     const code = session()
     await code.loadDocument(editableResult("---\n---\n\n<h1>Astro</h1>\n"), 1000)

@@ -151,7 +151,12 @@ export function getProjectThumb(
 export function warmPageThumbs(opts: {
   projectPath: string;
   baseUrl: string;
-  pages: Array<{ route: string; mtimeMs?: number | null }>;
+  pages: Array<{
+    route: string;
+    previewRoute?: string | null;
+    cacheKey?: string | null;
+    mtimeMs?: number | null;
+  }>;
 }): Promise<WarmPagesResult> {
   return api().warmPages(opts);
 }
@@ -174,7 +179,12 @@ export function prioritizeComponentThumbs(opts: {
 export function warmLayoutThumbs(opts: {
   projectPath: string;
   baseUrl: string;
-  pages: Array<{ route: string; mtimeMs?: number | null }>;
+  pages: Array<{
+    route: string;
+    previewRoute?: string | null;
+    cacheKey?: string | null;
+    mtimeMs?: number | null;
+  }>;
   layouts: Array<{ id: string; mtimeMs?: number | null }>;
 }): Promise<WarmPagesResult> {
   return api().warmLayouts(opts);

@@ -10,6 +10,7 @@ import {
   renameClassRuleCss,
 } from "../../shared/composer/renameClassReferences";
 import type { AstroDocumentModel } from "../../shared/composer/types";
+import { patchComposerModelSource } from "../../shared/composer/sourcePatches";
 import { getDesignSnapshot, scanClassUsage } from "../design";
 import { commitComposerEditTransaction } from "../composer/transaction";
 import { canonicalDirectory } from "../pathSafety";
@@ -135,11 +136,6 @@ export async function renameClassAcrossProject(input: {
   const usageBefore = scanClassUsage(input.projectPath, [from]);
 
   const rewrittenFiles: string[] = [];
-  const pageEdits: Array<{
-    relativeFile: string;
-    model: AstroDocumentModel;
-    expectedMtimeMs: number;
-  }> = [];
   const cssEdits: Array<{ relativeFile: string; content: string; expectedMtimeMs: number }> =
     [];
   const sourceEdits: Array<{ relativeFile: string; source: string; expectedSource: string; expectedMtimeMs: number }> = [];
@@ -160,12 +156,22 @@ export async function renameClassAcrossProject(input: {
         }
         continue;
       }
+      const beforeModel = structuredClone(parsed.model) as AstroDocumentModel;
       const changed = renameClassReferences(parsed.model.nodes, from, to);
       if (changed > 0) {
+        const patched = patchComposerModelSource(before, beforeModel, parsed.model);
+        if (!patched.ok) {
+          return {
+            ok: false,
+            code: "INVALID_INPUT",
+            message: `${relativeFile}: ${patched.reason}`,
+          };
+        }
         rewrittenFiles.push(relativeFile);
-        pageEdits.push({
+        sourceEdits.push({
           relativeFile,
-          model: parsed.model,
+          source: patched.source,
+          expectedSource: before,
           expectedMtimeMs,
         });
       } else {
@@ -201,10 +207,9 @@ export async function renameClassAcrossProject(input: {
     };
   }
 
-  if (pageEdits.length || sourceEdits.length || cssEdits.length) {
+  if (sourceEdits.length || cssEdits.length) {
     const committed = commitComposerEditTransaction({
       projectPath: input.projectPath,
-      pages: pageEdits,
       sources: sourceEdits,
       stylesheets: cssEdits,
     });

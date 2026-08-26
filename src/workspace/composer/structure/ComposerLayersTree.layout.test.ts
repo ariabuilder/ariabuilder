@@ -4,6 +4,7 @@ import { createApp, defineComponent, h, nextTick } from "vue"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import path from "node:path"
+import { compileStyle, parse } from "@vue/compiler-sfc"
 import type { ComposerLayerRow, ComposerLayerTreeProjection } from "../../../../shared/composer/layers"
 import { createComposerBeacon, provideComposerBeacon } from "../selection/useComposerBeacon"
 import ComposerLayersTree from "./ComposerLayersTree.vue"
@@ -15,7 +16,11 @@ Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
   value: vi.fn(),
 })
 
-function row(treeKey: string, region: "content" | "document"): ComposerLayerRow {
+function row(
+  treeKey: string,
+  region: "content" | "document",
+  overrides: Partial<ComposerLayerRow> = {},
+): ComposerLayerRow {
   return {
     path: treeKey,
     treeKey,
@@ -31,6 +36,7 @@ function row(treeKey: string, region: "content" | "document"): ComposerLayerRow 
     draggable: region === "content",
     deletable: region === "content",
     canAcceptChildren: true,
+    ...overrides,
   }
 }
 
@@ -59,12 +65,69 @@ afterEach(() => {
 
 describe("Composer Layers panel layout", () => {
   it("allows long layer rows to expand beyond the scroll-region width", () => {
-    const source = readFileSync(path.join(
+    const treeSource = readFileSync(path.join(
       process.cwd(),
       "src/workspace/composer/structure/ComposerLayersTree.vue",
     ), "utf8")
-    expect(source).toContain("min-inline-size: 100cqi")
-    expect(source).not.toContain("\n  inline-size: 100cqi")
+    const rowSource = readFileSync(path.join(
+      process.cwd(),
+      "src/workspace/composer/structure/StructureTreeNode.vue",
+    ), "utf8")
+    expect(treeSource).toContain("min-inline-size: 100cqi")
+    expect(treeSource).not.toContain("\n  inline-size: 100cqi")
+    expect(rowSource).toContain(".layer-action-rail")
+    expect(rowSource).toContain("position: sticky")
+    expect(rowSource).toContain("inset-inline-end: 0")
+
+    const filename = "src/workspace/composer/structure/StructureTreeNode.vue"
+    const { descriptor, errors } = parse(rowSource, { filename })
+    expect(errors).toHaveLength(0)
+    const style = descriptor.styles[0]
+    expect(style).toBeDefined()
+    const compiled = compileStyle({
+      filename,
+      id: "data-v-test",
+      source: style!.content,
+      scoped: style!.scoped,
+    })
+    expect(compiled.errors).toHaveLength(0)
+    expect(compiled.code).toContain(
+      ".layer-action-rail[data-v-test]:dir(rtl)::before",
+    )
+    expect(compiled.code).not.toMatch(/\[dir=rtl\]\s*\{[^}]*layer-action-fill/)
+  })
+
+  it("keeps horizontal scroll stable when a pinned action selects its row", async () => {
+    const tree: ComposerLayerTreeProjection = {
+      content: [row("content-main", "content", { hasMotion: true })],
+      document: [],
+      contentParentPath: null,
+    }
+    const host = mountLayers(tree)
+    const structure = host.querySelector<HTMLElement>('[data-layer-scroll-region="structure"]')
+    const item = host.querySelector<HTMLElement>('[role="treeitem"]')
+    const action = host.querySelector<HTMLButtonElement>('[data-layer-actions] button')
+    const scrollIntoView = vi.fn(() => {
+      if (structure) structure.scrollLeft = 0
+    })
+    Object.defineProperty(item!, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    })
+    structure!.scrollLeft = 72
+
+    action?.click()
+    await nextTick()
+    await nextTick()
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" })
+    expect(structure?.scrollLeft).toBe(72)
+
+    action?.dispatchEvent(new MouseEvent("click", { bubbles: true, metaKey: true }))
+    await nextTick()
+    await nextTick()
+    expect(item?.getAttribute("aria-selected")).toBe("true")
+    expect(structure?.scrollLeft).toBe(72)
   })
 
   it("keeps Document below a long independently scrolling Structure tree", async () => {

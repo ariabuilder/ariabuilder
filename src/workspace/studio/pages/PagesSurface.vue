@@ -769,7 +769,7 @@ async function onPageMenuAction(id: string, page: PagesTableRow) {
               @action="(id) => onPageMenuAction(id, row.original)"
             >
               <TableRow
-                class="group cursor-pointer border-b border-dashed border-border! transition-all duration-100 hover:bg-sidebar/30 hover:[box-shadow:inset_2px_0_0_0_var(--primary),inset_-2px_0_0_0_var(--primary)] data-[state=selected]:bg-card/50"
+                class="group cursor-pointer border-b border-dashed border-border! transition-all duration-100 hover:bg-sidebar/50 hover:[box-shadow:inset_2px_0_0_0_var(--primary),inset_-2px_0_0_0_var(--primary)] data-[state=selected]:bg-primary/5 data-[state=selected]:text-primary"
                 :data-state="
                   row.getIsSelected() || row.original.route === selectedRoute
                     ? 'selected'

@@ -1,5 +1,5 @@
 /**
- * Composer preview postMessage protocol v12 (`aria:` prefix).
+ * Composer preview postMessage protocol v14 (`aria:` prefix).
  *
  * Site iframe → host: geometry, interaction, viewport, reconcile results
  * Host → site iframe: tracking, reveal, direct patches, reconciliation
@@ -8,9 +8,9 @@
  * origin (localhost preview) and message shape.
  */
 
-export const ARIA_PROTOCOL_VERSION = 12 as const;
+export const ARIA_PROTOCOL_VERSION = 14 as const;
 /** Update whenever a preview bridge build is no longer host-compatible. */
-export const ARIA_BRIDGE_ID = "aria-composer-bridge-v12.0" as const;
+export const ARIA_BRIDGE_ID = "aria-composer-bridge-v14.0" as const;
 export const ARIA_BRIDGE_HEALTH_PATH = "/__aria/bridge-health" as const;
 
 export const ARIA_MSG = {
@@ -45,6 +45,12 @@ export const ARIA_MSG = {
   syncFontStylesheet: "aria:sync-font-stylesheet",
   /** Immediate source-model DOM mutations that do not require Astro execution. */
   patchNodes: "aria:patch-nodes",
+  inlineTextRequest: "aria:inline-text-request",
+  inlineTextStart: "aria:inline-text-start",
+  inlineTextStartResult: "aria:inline-text-start-result",
+  inlineTextChange: "aria:inline-text-change",
+  inlineTextFinish: "aria:inline-text-finish",
+  inlineTextResult: "aria:inline-text-result",
   /** Iframe acknowledgement for an optimistic patch revision. */
   patchResult: "aria:patch-result",
   /** Register marked boundaries to replace when this server revision is ready. */
@@ -174,6 +180,66 @@ export type AriaPatchNodesMessage = {
   type: typeof ARIA_MSG.patchNodes;
   revision: number;
   patches: import("./previewDiff").ComposerDomPatch[];
+  inlineTextOrigin?: import("./canvasText").CanvasTextPatchOrigin;
+};
+
+export type AriaInlineTextRequestMessage = {
+  type: typeof ARIA_MSG.inlineTextRequest;
+  requestId: string;
+  path: string;
+  occurrence: number;
+  mode: "replace" | "edit";
+  initialInput?: string;
+  renderedValue: string;
+};
+
+export type AriaInlineTextStartMessage = {
+  type: typeof ARIA_MSG.inlineTextStart;
+  requestId: string;
+  sessionId: string;
+  path: string;
+  occurrence: number;
+  value: string;
+  initialInput?: string;
+  mirrorPaths?: string[];
+};
+
+export type AriaInlineTextStartResultMessage = {
+  type: typeof ARIA_MSG.inlineTextStartResult;
+  requestId: string;
+  sessionId?: string;
+  ok: boolean;
+  reason?: string;
+};
+
+export type AriaInlineTextChangeMessage = {
+  type: typeof ARIA_MSG.inlineTextChange;
+  sessionId: string;
+  path: string;
+  occurrence: number;
+  sequence: number;
+  value: string;
+};
+
+export type AriaInlineTextFinishMessage = {
+  type: typeof ARIA_MSG.inlineTextFinish;
+  sessionId: string;
+  path: string;
+  occurrence: number;
+  sequence: number;
+  value: string;
+  action: "commit" | "cancel";
+};
+
+export type AriaInlineTextResultMessage = {
+  type: typeof ARIA_MSG.inlineTextResult;
+  sessionId: string;
+  sequence: number;
+  ok: boolean;
+  action?: "change" | "commit" | "cancel";
+  value?: string;
+  reason?: string;
+  destination?: string;
 };
 
 export const ARIA_PATCH_FAILURE_REASONS = [
@@ -306,7 +372,11 @@ export type AriaIframeToHostMessage =
   | AriaPageHeightMessage
   | AriaComputedStyleResponseMessage
   | AriaPatchResultMessage
-  | AriaReconcileResultMessage;
+  | AriaReconcileResultMessage
+  | AriaInlineTextRequestMessage
+  | AriaInlineTextStartResultMessage
+  | AriaInlineTextChangeMessage
+  | AriaInlineTextFinishMessage;
 
 export type AriaHostToIframeMessage =
   | AriaBridgePingMessage
@@ -325,7 +395,10 @@ export type AriaHostToIframeMessage =
   | AriaPopoverPreviewMessage
   | AriaSetVhMessage
   | AriaPatchNodesMessage
-  | AriaReconcileMessage;
+  | AriaReconcileMessage
+  | AriaInlineTextStartMessage
+  | AriaInlineTextStartResultMessage
+  | AriaInlineTextResultMessage;
 
 export function isAriaProtocolMessage(
   data: unknown,
@@ -352,6 +425,18 @@ export function isAriaProtocolMessage(
     status?: unknown;
     reason?: unknown;
     reloadReason?: unknown;
+    requestId?: unknown;
+    sessionId?: unknown;
+    path?: unknown;
+    occurrence?: unknown;
+    mode?: unknown;
+    initialInput?: unknown;
+    mirrorPaths?: unknown;
+    renderedValue?: unknown;
+    sequence?: unknown;
+    value?: unknown;
+    action?: unknown;
+    destination?: unknown;
   };
   const type = message.type;
   if (type === ARIA_MSG.ready) {
@@ -365,6 +450,49 @@ export function isAriaProtocolMessage(
   }
   if (type === ARIA_MSG.patchNodes) {
     return Number.isFinite(message.revision) && Array.isArray(message.patches);
+  }
+  if (type === ARIA_MSG.inlineTextRequest) {
+    return typeof message.requestId === "string" &&
+      typeof message.path === "string" &&
+      Number.isInteger(message.occurrence) && Number(message.occurrence) >= 0 &&
+      (message.mode === "replace" || message.mode === "edit") &&
+      (message.initialInput === undefined || typeof message.initialInput === "string") &&
+      typeof message.renderedValue === "string";
+  }
+  if (type === ARIA_MSG.inlineTextStart) {
+    return typeof message.requestId === "string" && typeof message.sessionId === "string" &&
+      typeof message.path === "string" && Number.isInteger(message.occurrence) && Number(message.occurrence) >= 0 &&
+      typeof message.value === "string" &&
+      (message.initialInput === undefined || typeof message.initialInput === "string") &&
+      (message.mirrorPaths === undefined || (
+        Array.isArray(message.mirrorPaths) && message.mirrorPaths.every((path) => typeof path === "string")
+      ));
+  }
+  if (type === ARIA_MSG.inlineTextStartResult) {
+    return typeof message.requestId === "string" &&
+      (message.sessionId === undefined || typeof message.sessionId === "string") &&
+      typeof message.ok === "boolean" &&
+      (message.reason === undefined || typeof message.reason === "string");
+  }
+  if (type === ARIA_MSG.inlineTextChange) {
+    return typeof message.sessionId === "string" && typeof message.path === "string" &&
+      Number.isInteger(message.occurrence) && Number(message.occurrence) >= 0 &&
+      Number.isInteger(message.sequence) && Number(message.sequence) >= 0 &&
+      typeof message.value === "string";
+  }
+  if (type === ARIA_MSG.inlineTextFinish) {
+    return typeof message.sessionId === "string" && typeof message.path === "string" &&
+      Number.isInteger(message.occurrence) && Number(message.occurrence) >= 0 &&
+      Number.isInteger(message.sequence) && Number(message.sequence) >= 0 &&
+      typeof message.value === "string" &&
+      (message.action === "commit" || message.action === "cancel");
+  }
+  if (type === ARIA_MSG.inlineTextResult) {
+    return typeof message.sessionId === "string" && Number.isInteger(message.sequence) && Number(message.sequence) >= 0 &&
+      typeof message.ok === "boolean" &&
+      (message.value === undefined || typeof message.value === "string") &&
+      (message.reason === undefined || typeof message.reason === "string") &&
+      (message.destination === undefined || typeof message.destination === "string");
   }
   if (type === ARIA_MSG.patchResult) {
     return (
@@ -472,5 +600,9 @@ export function isAriaIframeToHostMessage(
     data.type === ARIA_MSG.computedStyleResponse ||
     data.type === ARIA_MSG.patchResult ||
     data.type === ARIA_MSG.reconcileResult
+    || data.type === ARIA_MSG.inlineTextRequest
+    || data.type === ARIA_MSG.inlineTextStartResult
+    || data.type === ARIA_MSG.inlineTextChange
+    || data.type === ARIA_MSG.inlineTextFinish
   );
 }

@@ -5,13 +5,18 @@ import {
   adoptCmsLoop,
   bindCmsPropAtPath,
   bindCmsTextAtPath,
+  compileCmsBindingExpression,
   detectCmsContext,
   describeComposerCmsSelection,
+  resolveComposerTextTargetPath,
+  resolveDirectCmsTextBinding,
   parseCmsContentExposure,
+  pruneUnusedCmsArtifacts,
   mapSuggestedCmsFieldsAtPath,
   setCmsContentExposureAtPath,
   unwrapCmsLoop,
   upsertCmsCollectionQuery,
+  upsertCmsRelationLookup,
   wrapNodeInCmsLoop,
   unbindCmsPropAtPath,
   unbindCmsTextAtPath,
@@ -25,6 +30,112 @@ async function model(source: string) {
 }
 
 describe("Astro-native CMS bindings", () => {
+  it("compiles one-hop reference and relation bindings through managed lookups", () => {
+    expect(compileCmsBindingExpression({
+      contextVariable: "entry",
+      field: "author.name",
+      relation: {
+        sourceField: "author",
+        targetCollection: "authors",
+        targetField: "name",
+        kind: "reference",
+        lookupVariable: "ariaCmsAuthorsById",
+      },
+    })).toContain('?.id ?? (entry?.data?.["author"])?.slug');
+    expect(compileCmsBindingExpression({
+      contextVariable: "entry",
+      field: "author.name",
+      relation: {
+        sourceField: "author",
+        targetCollection: "authors",
+        targetField: "name",
+        kind: "reference",
+        lookupVariable: "ariaCmsAuthorsById",
+      },
+    })).toContain('ariaCmsAuthorsById.get(String(');
+    expect(compileCmsBindingExpression({
+      contextVariable: "entry",
+      field: "tags.0.label",
+      relation: {
+        sourceField: "tags",
+        targetCollection: "tags",
+        targetField: "label",
+        kind: "relation",
+        index: 0,
+        lookupVariable: "ariaCmsTagsById",
+      },
+    })).toContain('Array.isArray(entry?.data?.["tags"])');
+  });
+
+  it("deduplicates and prunes related collection lookup blocks", async () => {
+    const doc = await model(`<p>Static</p>`);
+    const first = upsertCmsRelationLookup(doc, "authors");
+    expect(upsertCmsRelationLookup(doc, "authors")).toBe(first);
+    expect(doc.extraFrontmatter.match(/@aria-cms-lookup:authors/g)).toHaveLength(1);
+    doc.nodes = [(await model(`<p>{${first}.get("one")?.name}</p>`)).nodes[0]!];
+    pruneUnusedCmsArtifacts(doc);
+    expect(doc.extraFrontmatter).toContain("@aria-cms-lookup:authors");
+    doc.nodes = [(await model(`<p>Static</p>`)).nodes[0]!];
+    pruneUnusedCmsArtifacts(doc);
+    expect(doc.extraFrontmatter).not.toContain("@aria-cms-lookup:authors");
+  });
+
+  it("preserves a user-owned getCollection import after managed artifacts are pruned", async () => {
+    const doc = await model(`---
+import { getCollection } from "astro:content";
+const posts = await getCollection("posts");
+---
+{posts.map((post) => <p>{post.data.title}</p>)}`);
+    pruneUnusedCmsArtifacts(doc);
+    expect(doc.extraFrontmatter).toContain('import { getCollection } from "astro:content";');
+    expect(doc.extraFrontmatter).toContain('await getCollection("posts")');
+  });
+
+  it("round-trips a related binding and cleans up its lookup after unbinding", async () => {
+    const doc = await model(`<h2>Exact fallback</h2>`);
+    const query = upsertCmsCollectionQuery(doc, {
+      id: "featured-post",
+      collection: "posts",
+      entrySlug: "featured",
+      variable: "featuredPost",
+    });
+    const lookupVariable = upsertCmsRelationLookup(doc, "authors");
+    expect(bindCmsTextAtPath(doc, "0.0", {
+      contextVariable: query.variable,
+      field: "author.name",
+      relation: {
+        sourceField: "author",
+        targetCollection: "authors",
+        targetField: "name",
+        kind: "reference",
+        lookupVariable,
+      },
+    }).ok).toBe(true);
+
+    const source = serializeAstro(doc);
+    expect(source).toContain("@aria-cms-field:author.name");
+    expect(source).toContain("entry.data.ariaEntryId");
+    const reparsed = await model(source);
+    expect(resolveDirectCmsTextBinding(reparsed, "0")).toMatchObject({
+      collection: "posts",
+      entrySlug: "featured",
+      field: "author.name",
+      relation: {
+        sourceField: "author",
+        targetCollection: "authors",
+        targetField: "name",
+        kind: "reference",
+      },
+    });
+    expect(unbindCmsTextAtPath(reparsed, "0.0").ok).toBe(true);
+    pruneUnusedCmsArtifacts(reparsed);
+    const restored = serializeAstro(reparsed);
+    expect(restored).toContain("Exact fallback");
+    expect(restored).not.toContain("@aria-cms-query");
+    expect(restored).not.toContain("@aria-cms-lookup");
+    expect(restored).not.toContain("astro:content");
+  });
+
   it("binds props and text while preserving static fallbacks", async () => {
     const doc = await model("---\nconst { post } = Astro.props;\n---\n<h1 title=\"Original\">Original title</h1>");
     expect(bindCmsPropAtPath(doc, "0", "title", { contextVariable: "post", field: "title" }).ok).toBe(true);
@@ -83,6 +194,93 @@ describe("Astro-native CMS bindings", () => {
     });
     expect(result.variable).toBe("featuredPost");
     expect(doc.extraFrontmatter).toContain('.find((entry) => (entry.data.slug ?? entry.id) === "hello-world")');
+  });
+
+  it("resolves a managed direct-entry text field for visual editing", async () => {
+    const doc = await model(`---
+import { getCollection } from "astro:content";
+/* @aria-cms-query:hero-copy */
+const heroCopy = (await getCollection("site-copy"))
+  .find((entry) => (entry.data.slug ?? entry.id) === "hero");
+/* @aria-cms-query-end:hero-copy */
+---
+<p class="badge">
+  <span class="badge__dot" />
+  {heroCopy?.data?.["eyebrow"] ?? /* @aria-cms-fallback */ "Fallback"}
+</p>`);
+    expect(resolveDirectCmsTextBinding(doc, "0")).toEqual({
+      path: "0.3",
+      collection: "site-copy",
+      entrySlug: "hero",
+      contextVariable: "heroCopy",
+      field: "eyebrow",
+      contentExposure: "editable",
+    });
+    expect(describeComposerCmsSelection(doc, "0").textTargetPath).toBe("0.3");
+
+    doc.nodes.push((await model(`<a data-button-variant="primary">
+  <Icon />
+  {heroCopy?.data?.["primaryActionLabel"] ?? /* @aria-cms-fallback */ "Download"}
+</a>`)).nodes[0]!);
+    expect(resolveDirectCmsTextBinding(doc, "1")).toMatchObject({
+      path: "1.2",
+      field: "primaryActionLabel",
+    });
+  });
+
+  it("resolves a managed text field through nested inline wrappers", async () => {
+    const doc = await model(`---
+import { getCollection } from "astro:content";
+/* @aria-cms-query:site-copy-cms-statement */
+const statement = (await getCollection("site-copy"))
+  .find((entry) => (entry.data.slug ?? entry.id) === "cms-statement");
+/* @aria-cms-query-end:site-copy-cms-statement */
+---
+<h2 class="statement__line">
+  <span class="text-reveal"><span class="text-reveal__line">
+    {statement?.data?.["heading"] ?? /* @aria-cms-fallback */ "A CMS built into the workspace."}
+  </span></span>
+</h2>`);
+    const targetPath = resolveComposerTextTargetPath(doc, "0");
+    expect(targetPath).toBe("0.1.0.1");
+    expect(resolveDirectCmsTextBinding(doc, "0")).toEqual({
+      path: targetPath,
+      collection: "site-copy",
+      entrySlug: "cms-statement",
+      contextVariable: "statement",
+      field: "heading",
+      contentExposure: "editable",
+    });
+    expect(describeComposerCmsSelection(doc, "0")).toMatchObject({
+      collection: "site-copy",
+      collections: ["site-copy"],
+      contextVariable: "statement",
+      contexts: ["statement"],
+      field: "heading",
+      bindingCount: 1,
+      ownership: "managed",
+      managedQueryId: "site-copy-cms-statement",
+      canBindText: true,
+      textTargetPath: targetPath,
+      summary: "Heading",
+    });
+  });
+
+  it("does not resolve ambiguous or block-level nested text targets", async () => {
+    const ambiguous = await model(
+      `<h2><span>{statement?.data?.["heading"]}</span><span>Fallback</span></h2>`,
+    );
+    expect(resolveComposerTextTargetPath(ambiguous, "0")).toBeNull();
+
+    const blockDescendant = await model(
+      `<div><h2>{statement?.data?.["heading"]}</h2></div>`,
+    );
+    expect(resolveComposerTextTargetPath(blockDescendant, "0")).toBeNull();
+
+    const componentBoundary = await model(
+      `<h2><TextReveal>{statement?.data?.["heading"]}</TextReveal></h2>`,
+    );
+    expect(resolveComposerTextTargetPath(componentBoundary, "0")).toBeNull();
   });
 
   it("restores an adopted project-data loop without removing the template", async () => {

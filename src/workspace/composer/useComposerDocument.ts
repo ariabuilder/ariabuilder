@@ -12,6 +12,7 @@ import type {
   ComposerStylesheetEdit,
 } from "../../../shared/composer/transaction"
 import type { InsertTarget } from "../../../shared/composer/mutate"
+import type { CanvasTextPatchOrigin } from "../../../shared/composer/canvasText"
 import {
   canReorder,
   cloneNodesWithNewIds,
@@ -22,6 +23,7 @@ import {
   insertComponentAt,
   insertElementAt,
   insertNodesAt,
+  locateAtPath,
   parentAcceptsChildAtPath,
   renamePropAtPath,
   reorderNodeAtPath,
@@ -117,6 +119,7 @@ function sameSelectionPaths(
 type HistoryEntry = {
   kind: "model"
   model: AstroDocumentModel
+  source: string | null
   selectedPath: string | null
   selections: import("../../../shared/composer/selection").SelectionRef[]
   stylesheets: ComposerStylesheetSnapshot[]
@@ -126,6 +129,7 @@ type HistoryEntry = {
 type ComposerDocumentSnapshot = {
   relativeFile: string
   model: AstroDocumentModel
+  source: string
   mtimeMs: number
 }
 
@@ -222,6 +226,18 @@ export type ComposerDocumentApi = {
     value: string,
     options?: { immediate?: boolean },
   ) => boolean
+  beginCanvasTextEdit: (input: {
+    sessionId: string
+    path: string
+    occurrence: number
+    detachExpression?: boolean
+    renderedValue?: string
+  }) => { ok: true; value: string } | { ok: false; reason: string }
+  updateCanvasTextEdit: (input: CanvasTextPatchOrigin & { value: string }) => boolean
+  finishCanvasTextEdit: (
+    sessionId: string,
+    action: "commit" | "cancel",
+  ) => Promise<{ ok: boolean; value: string; reason?: string }>
   setSelectedTag: (tag: string) => boolean
   commitStylesheetEdit: (
     edit: ComposerStylesheetEdit & { beforeContent: string },
@@ -311,6 +327,10 @@ export function useComposerDocument(options: {
   model: Ref<AstroDocumentModel | null>
   editable: Ref<boolean>
   designActive: Ref<boolean>
+  /** Exact source loaded from disk for formatting-preserving visual writes. */
+  exactSource?: Ref<string | null>
+  /** Advance the Code session baseline after an exact visual write persists. */
+  onExactSourcePersisted?: (source: string) => void
   /** Exact staged Code source; non-null means visual mutations must patch it. */
   stagedSource?: Ref<string | null>
   /**
@@ -325,7 +345,13 @@ export function useComposerDocument(options: {
   draftHistoryBlocked?: Ref<boolean>
   previewRevision?: Ref<number>
   reservePreviewRevision?: () => number
-  onModelMutation?: (before: AstroDocumentModel, after: AstroDocumentModel, reservedRevision?: number) => void
+  onModelMutation?: (
+    before: AstroDocumentModel,
+    after: AstroDocumentModel,
+    reservedRevision?: number,
+    exactSource?: string,
+    inlineTextOrigin?: CanvasTextPatchOrigin,
+  ) => void
   onPersisted?: (result: Extract<import("../../../shared/composer/transaction").ComposerEditTransactionResult, { ok: true }>) => void
   beacon: ComposerBeacon
   availablePages?: Ref<readonly { file: string }[]>
@@ -361,6 +387,25 @@ export function useComposerDocument(options: {
   let lastKey: string | null = null
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   let saveChain: Promise<void> = Promise.resolve()
+  /** Unsaved visual mutations patched into the exact loaded source. */
+  let pendingSource: string | null = null
+  let pendingSourceRevision = 0
+  let canvasTextSession: null | {
+    sessionId: string
+    path: string
+    occurrence: number
+    detachExpression: boolean
+    originalValue: string
+    baselineModel: AstroDocumentModel
+    baselinePendingSource: string | null
+    baselinePendingRevision: number
+    baselineStagedSource: string | null
+    baselineDirty: boolean
+    baselinePast: HistoryEntry[]
+    baselineFuture: HistoryEntry[]
+    lastSequence: number
+    changed: boolean
+  } = null
   const beforeFlushHooks = new Set<() => void | Promise<void>>()
   /** After our write, ignore one external mtime bump for this file. */
   let suppressReloadUntil = 0
@@ -420,6 +465,10 @@ export function useComposerDocument(options: {
     return {
       kind: "model",
       model: cloneComposerValue(model),
+      source: options.stagedSource?.value
+        ?? pendingSource
+        ?? options.exactSource?.value
+        ?? null,
       selectedPath: options.beacon.selectedPath.value,
       selections: cloneSelections(options.beacon.selections.value),
       stylesheets: cloneComposerValue([...stylesheetState.values()]),
@@ -448,9 +497,16 @@ export function useComposerDocument(options: {
     return !coalesce
   }
 
-  function applySnapshotLocally(entry: HistoryEntry) {
+  function applySnapshotLocally(entry: HistoryEntry, exactSource?: string) {
     const nextModel = cloneComposerValue(entry.model)
-    if (options.model.value) options.onModelMutation?.(options.model.value, nextModel)
+    if (options.model.value) {
+      options.onModelMutation?.(
+        options.model.value,
+        nextModel,
+        undefined,
+        exactSource,
+      )
+    }
     options.model.value = nextModel
     stylesheetState.clear()
     for (const sheet of entry.stylesheets) {
@@ -492,6 +548,32 @@ export function useComposerDocument(options: {
     return error
   }
 
+  function patchVisualSource(
+    before: AstroDocumentModel,
+    after: AstroDocumentModel,
+  ): string | null | false {
+    const staged = options.stagedSource?.value
+    const source = staged ?? pendingSource ?? options.exactSource?.value
+    if (source == null) {
+      if (options.exactSource) {
+        saveError.value = "The exact Astro source is unavailable. Reload before editing."
+        return false
+      }
+      return null
+    }
+    const patched = patchComposerModelSource(source, before, after)
+    if (!patched.ok) {
+      saveError.value = patched.reason
+      return false
+    }
+    if (staged != null) options.onStagedSourceChange?.(patched.source)
+    else {
+      pendingSource = patched.source
+      pendingSourceRevision += 1
+    }
+    return patched.source
+  }
+
   async function performFlushSave() {
     if (saveTimer) {
       clearTimeout(saveTimer)
@@ -507,23 +589,48 @@ export function useComposerDocument(options: {
     saving.value = true
     saveError.value = null
     try {
-      // Vue deep refs are Proxies — Electron IPC structured-clone rejects them.
-      const plainModel = cloneComposerValue(model)
+      const source = pendingSource
+      const sourceRevision = pendingSourceRevision
+      if (source == null && options.exactSource) {
+        throw new Error("The exact Astro source is unavailable. Reload before saving.")
+      }
       const result = await commitComposerEditTransaction({
         projectPath: options.projectPath.value,
         previewRevision: options.previewRevision?.value,
-        page: {
-          relativeFile: file,
-          model: plainModel,
-          expectedMtimeMs: options.editedMtimeMs.value,
-        },
+        ...(source != null
+          ? {
+              sources: [{
+                relativeFile: file,
+                source,
+                expectedSource: options.exactSource?.value ?? undefined,
+                expectedMtimeMs: options.editedMtimeMs.value,
+              }],
+            }
+          : {
+              // Legacy fallback for callers that do not provide exact source.
+              // Vue deep refs are Proxies; Electron IPC cannot clone them.
+              page: {
+                relativeFile: file,
+                model: cloneComposerValue(model),
+                expectedMtimeMs: options.editedMtimeMs.value,
+              },
+            }),
       })
       if (!result.ok) throw conflictError(result)
       const revision = result.revisions.find(
         (item) => item.relativeFile === file,
       ) ?? result.revisions[0]
       if (revision) options.editedMtimeMs.value = revision.mtimeMs
-      dirty.value = false
+      if (source != null) {
+        const hasNewerSource = pendingSourceRevision !== sourceRevision
+          || pendingSource !== source
+        if (!hasNewerSource) pendingSource = null
+        options.onExactSourcePersisted?.(source)
+        dirty.value = hasNewerSource
+        if (hasNewerSource) scheduleSave(true)
+      } else {
+        dirty.value = false
+      }
       options.onPersisted?.(result)
       // Watcher self-write + short client suppress for scan race.
       suppressReloadUntil = Date.now() + 1600
@@ -574,6 +681,8 @@ export function useComposerDocument(options: {
     next: AstroDocumentModel,
     result: Exclude<ComposerModelMutationResult, void>,
     reservedRevision?: number,
+    exactSource?: string,
+    inlineTextOrigin?: CanvasTextPatchOrigin,
   ): void {
     const selectedResultPath = result.selectPaths?.[0]
       ?? (result.selectPath === undefined
@@ -592,7 +701,13 @@ export function useComposerDocument(options: {
       && nodeSignature(current, selectedResultPath)
         !== nodeSignature(next, selectedResultPath),
     )
-    options.onModelMutation?.(current, next, reservedRevision)
+    options.onModelMutation?.(
+      current,
+      next,
+      reservedRevision,
+      exactSource,
+      inlineTextOrigin,
+    )
     options.model.value = next
     if (result.selectPath !== undefined || result.selectPaths?.length) {
       if (result.selectPaths?.length) {
@@ -656,20 +771,18 @@ export function useComposerDocument(options: {
       }
       return false
     }
-    if (options.stagedSource?.value != null) {
-      const patched = patchComposerModelSource(
-        options.stagedSource.value,
-        options.model.value,
-        next,
-      )
-      if (!patched.ok) {
-        if (pushed) past.value = past.value.slice(0, -1)
-        saveError.value = patched.reason
-        return false
-      }
-      options.onStagedSourceChange?.(patched.source)
+    const patchedSource = patchVisualSource(options.model.value, next)
+    if (patchedSource === false) {
+      if (pushed) past.value = past.value.slice(0, -1)
+      return false
     }
-    adoptModelMutation(options.model.value, next, result)
+    adoptModelMutation(
+      options.model.value,
+      next,
+      result,
+      undefined,
+      patchedSource ?? undefined,
+    )
     dirty.value = true
     if (options.stagedSource?.value == null) {
       scheduleSave(
@@ -730,6 +843,21 @@ export function useComposerDocument(options: {
         return false
       }
 
+      const exactSource = options.exactSource?.value
+      if (exactSource == null && options.exactSource) {
+        if (pushed) past.value = past.value.slice(0, -1)
+        saveError.value = "The exact Astro source is unavailable. Reload before saving."
+        return false
+      }
+      const patched = exactSource == null
+        ? null
+        : patchComposerModelSource(exactSource, current, next)
+      if (patched && !patched.ok) {
+        if (pushed) past.value = past.value.slice(0, -1)
+        saveError.value = patched.reason
+        return false
+      }
+
       saving.value = true
       saveError.value = null
       const reservedPreviewRevision = options.reservePreviewRevision?.() ?? options.previewRevision?.value
@@ -737,19 +865,37 @@ export function useComposerDocument(options: {
         const result = await commitComposerEditTransaction({
           projectPath: options.projectPath.value,
           previewRevision: reservedPreviewRevision,
-          page: {
-            relativeFile: file,
-            model: next,
-            expectedMtimeMs: options.editedMtimeMs.value,
-          },
+          ...(patched?.ok
+            ? {
+                sources: [{
+                  relativeFile: file,
+                  source: patched.source,
+                  expectedSource: exactSource ?? undefined,
+                  expectedMtimeMs: options.editedMtimeMs.value,
+                }],
+              }
+            : {
+                page: {
+                  relativeFile: file,
+                  model: next,
+                  expectedMtimeMs: options.editedMtimeMs.value,
+                },
+              }),
         })
         if (!result.ok) throw conflictError(result)
-        adoptModelMutation(current, next, mutation, reservedPreviewRevision)
+        adoptModelMutation(
+          current,
+          next,
+          mutation,
+          reservedPreviewRevision,
+          patched?.ok ? patched.source : undefined,
+        )
         options.onPersisted?.(result)
         const revision = result.revisions.find(
           (item) => item.relativeFile === file,
         ) ?? result.revisions[0]
         if (revision) options.editedMtimeMs.value = revision.mtimeMs
+        if (patched?.ok) options.onExactSourcePersisted?.(patched.source)
         dirty.value = false
         future.value = []
         suppressReloadUntil = Date.now() + 1600
@@ -835,6 +981,7 @@ export function useComposerDocument(options: {
     trackStylesheetBefore(edit)
     const pushed = pushHistory(commitOptions?.coalesceKey ?? null)
     saving.value = true
+    mutationPending.value = true
     saveError.value = null
     try {
       const result = await commitComposerEditTransaction({
@@ -857,6 +1004,7 @@ export function useComposerDocument(options: {
       return null
     } finally {
       saving.value = false
+      mutationPending.value = false
     }
   }
 
@@ -905,18 +1053,44 @@ export function useComposerDocument(options: {
       if (pushed) past.value = past.value.slice(0, -1)
       return null
     }
+    const sourceBefore = pendingSource ?? options.exactSource?.value ?? null
+    if (sourceBefore == null && options.exactSource) {
+      if (pushed) past.value = past.value.slice(0, -1)
+      saveError.value = "The exact Astro source is unavailable. Reload before saving."
+      return null
+    }
+    const patched = sourceBefore == null
+      ? null
+      : patchComposerModelSource(sourceBefore, current, next)
+    if (patched && !patched.ok) {
+      if (pushed) past.value = past.value.slice(0, -1)
+      saveError.value = patched.reason
+      return null
+    }
     saving.value = true
+    mutationPending.value = true
     saveError.value = null
     const reservedPreviewRevision = options.reservePreviewRevision?.() ?? options.previewRevision?.value
     try {
       const result = await commitComposerEditTransaction({
         projectPath: options.projectPath.value,
         previewRevision: reservedPreviewRevision,
-        page: {
-          relativeFile: file,
-          model: next,
-          expectedMtimeMs: options.editedMtimeMs.value,
-        },
+        ...(patched?.ok
+          ? {
+              sources: [{
+                relativeFile: file,
+                source: patched.source,
+                expectedSource: options.exactSource?.value ?? undefined,
+                expectedMtimeMs: options.editedMtimeMs.value,
+              }],
+            }
+          : {
+              page: {
+                relativeFile: file,
+                model: next,
+                expectedMtimeMs: options.editedMtimeMs.value,
+              },
+            }),
         stylesheets: [edit],
       })
       if (!result.ok) throw conflictError(result)
@@ -925,12 +1099,17 @@ export function useComposerDocument(options: {
         next,
         mutation ?? { ok: true },
         reservedPreviewRevision,
+        patched?.ok ? patched.source : undefined,
       )
       options.onPersisted?.(result)
       const pageRevision = result.revisions.find(
         (revision) => revision.relativeFile === file,
       )
       if (pageRevision) options.editedMtimeMs.value = pageRevision.mtimeMs
+      if (patched?.ok) {
+        pendingSource = null
+        options.onExactSourcePersisted?.(patched.source)
+      }
       const cssRevision = result.revisions.find(
         (revision) => revision.relativeFile === edit.relativeFile,
       )
@@ -951,6 +1130,7 @@ export function useComposerDocument(options: {
       return null
     } finally {
       saving.value = false
+      mutationPending.value = false
     }
   }
 
@@ -1764,6 +1944,7 @@ export function useComposerDocument(options: {
     let consumers: Array<{
       file: string
       mtimeMs: number
+      source: string
       before: AstroDocumentModel
       after: AstroDocumentModel
     } | null>
@@ -1783,7 +1964,13 @@ export function useComposerDocument(options: {
             ? renameComposerPageSlotAssignments(after, slot.name!, action.nextName)
             : unwrapComposerPageSlotAssignments(after, slot.name!)
           return changed > 0
-            ? { file, mtimeMs: Math.floor(parsed.mtimeMs), before, after }
+            ? {
+                file,
+                mtimeMs: Math.floor(parsed.mtimeMs),
+                source: parsed.source,
+                before,
+                after,
+              }
             : null
         }),
       )
@@ -1798,6 +1985,7 @@ export function useComposerDocument(options: {
       documentState.set(consumer.file, {
         relativeFile: consumer.file,
         model: consumer.before,
+        source: consumer.source,
         mtimeMs: consumer.mtimeMs,
       })
     }
@@ -1805,25 +1993,55 @@ export function useComposerDocument(options: {
     saving.value = true
     saveError.value = null
     try {
+      const layoutSource = pendingSource ?? options.exactSource?.value
+      if (layoutSource == null) {
+        throw new Error("The exact layout source is unavailable. Reload before editing slots.")
+      }
+      const patchedLayout = patchComposerModelSource(
+        layoutSource,
+        currentLayout,
+        layout,
+      )
+      if (!patchedLayout.ok) throw new Error(patchedLayout.reason)
+      const patchedConsumers = affected.map((consumer) => {
+        const patched = patchComposerModelSource(
+          consumer.source,
+          consumer.before,
+          consumer.after,
+        )
+        if (!patched.ok) throw new Error(`${consumer.file}: ${patched.reason}`)
+        return {
+          relativeFile: consumer.file,
+          source: patched.source,
+          expectedSource: consumer.source,
+          expectedMtimeMs: consumer.mtimeMs,
+        }
+      })
       const result = await commitComposerEditTransaction({
         projectPath: options.projectPath.value,
         previewRevision: options.previewRevision?.value,
-        pages: [
+        sources: [
           {
             relativeFile: layoutFile,
-            model: layout,
+            source: patchedLayout.source,
+            expectedSource: options.exactSource?.value ?? undefined,
             expectedMtimeMs: options.editedMtimeMs.value,
           },
-          ...affected.map((consumer) => ({
-            relativeFile: consumer.file,
-            model: consumer.after,
-            expectedMtimeMs: consumer.mtimeMs,
-          })),
+          ...patchedConsumers,
         ],
       })
       if (!result.ok) throw conflictError(result)
-      if (options.model.value) options.onModelMutation?.(options.model.value, layout)
+      if (options.model.value) {
+        options.onModelMutation?.(
+          options.model.value,
+          layout,
+          undefined,
+          patchedLayout.source,
+        )
+      }
       options.model.value = layout
+      pendingSource = null
+      options.onExactSourcePersisted?.(patchedLayout.source)
       options.onPersisted?.(result)
       for (const revision of result.revisions) {
         if (revision.relativeFile === layoutFile) {
@@ -1835,6 +2053,9 @@ export function useComposerDocument(options: {
           documentState.set(consumer.file, {
             relativeFile: consumer.file,
             model: consumer.after,
+            source: patchedConsumers.find(
+              (item) => item.relativeFile === consumer.file,
+            )?.source ?? consumer.source,
             mtimeMs: revision.mtimeMs,
           })
         }
@@ -1979,6 +2200,151 @@ export function useComposerDocument(options: {
     )
   }
 
+  function beginCanvasTextEdit(input: {
+    sessionId: string
+    path: string
+    occurrence: number
+    detachExpression?: boolean
+    renderedValue?: string
+  }): { ok: true; value: string } | { ok: false; reason: string } {
+    if (!options.editable.value || !options.model.value || mutationPending.value) {
+      return { ok: false, reason: "This document is not currently editable." }
+    }
+    if (canvasTextSession) {
+      return { ok: false, reason: "Finish the current text edit first." }
+    }
+    const node = nodeAtMarkerPath(options.model.value.nodes, input.path)
+    if (!node || (node.kind !== "text" && node.kind !== "expr")) {
+      return { ok: false, reason: "Select a plain heading or text element." }
+    }
+    if (node.kind === "expr" && !input.detachExpression) {
+      return { ok: false, reason: "This text is connected to a live value." }
+    }
+    if (saveTimer) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+    }
+    const baselinePast = cloneComposerValue(past.value)
+    const baselineFuture = cloneComposerValue(future.value)
+    const baselineModel = cloneComposerValue(options.model.value)
+    pushHistory(null)
+    const originalValue = input.renderedValue ?? node.value
+    canvasTextSession = {
+      sessionId: input.sessionId,
+      path: input.path,
+      occurrence: input.occurrence,
+      detachExpression: Boolean(input.detachExpression),
+      originalValue,
+      baselineModel,
+      baselinePendingSource: pendingSource,
+      baselinePendingRevision: pendingSourceRevision,
+      baselineStagedSource: options.stagedSource?.value ?? null,
+      baselineDirty: dirty.value,
+      baselinePast,
+      baselineFuture,
+      lastSequence: 0,
+      changed: false,
+    }
+    return { ok: true, value: originalValue }
+  }
+
+  function updateCanvasTextEdit(
+    input: CanvasTextPatchOrigin & { value: string },
+  ): boolean {
+    const session = canvasTextSession
+    const current = options.model.value
+    if (
+      !session || !current || input.sessionId !== session.sessionId ||
+      input.path !== session.path || input.occurrence !== session.occurrence ||
+      input.sequence <= session.lastSequence
+    ) return false
+    const next = cloneComposerValue(current)
+    const location = locateAtPath(next.nodes, session.path)
+    if (!location || (location.node.kind !== "text" && location.node.kind !== "expr")) {
+      saveError.value = "The selected text is no longer available."
+      return false
+    }
+    if (location.node.kind === "expr") {
+      if (!session.detachExpression) return false
+      location.list[location.index] = {
+        kind: "text",
+        id: location.node.id,
+        sourceRange: location.node.sourceRange,
+        value: input.value,
+      }
+    } else {
+      location.node.value = input.value
+    }
+    const patchedSource = patchVisualSource(current, next)
+    if (patchedSource === false) return false
+    session.lastSequence = input.sequence
+    session.changed = true
+    adoptModelMutation(
+      current,
+      next,
+      { ok: true },
+      undefined,
+      patchedSource ?? undefined,
+      input,
+    )
+    dirty.value = true
+    return true
+  }
+
+  async function finishCanvasTextEdit(
+    sessionId: string,
+    action: "commit" | "cancel",
+  ): Promise<{ ok: boolean; value: string; reason?: string }> {
+    const session = canvasTextSession
+    if (!session || session.sessionId !== sessionId) {
+      return { ok: false, value: "", reason: "This text editing session is stale." }
+    }
+    canvasTextSession = null
+    if (action === "cancel" || !session.changed) {
+      const current = options.model.value
+      const restoreSource = session.baselineStagedSource
+        ?? session.baselinePendingSource
+        ?? options.exactSource?.value
+        ?? undefined
+      if (current && session.changed) {
+        options.onModelMutation?.(
+          current,
+          cloneComposerValue(session.baselineModel),
+          undefined,
+          restoreSource,
+          {
+            sessionId,
+            path: session.path,
+            occurrence: session.occurrence,
+            sequence: session.lastSequence + 1,
+          },
+        )
+      }
+      options.model.value = cloneComposerValue(session.baselineModel)
+      if (options.stagedSource && session.baselineStagedSource != null) {
+        options.onStagedSourceChange?.(session.baselineStagedSource)
+      }
+      pendingSource = session.baselinePendingSource
+      pendingSourceRevision = session.baselinePendingRevision
+      past.value = session.baselinePast
+      future.value = session.baselineFuture
+      dirty.value = session.baselineDirty
+      saveError.value = null
+      if (session.baselineDirty && options.stagedSource?.value == null) {
+        scheduleSave(false)
+      }
+      return { ok: true, value: session.originalValue }
+    }
+    if (options.stagedSource?.value == null) scheduleSave(false)
+    const node = options.model.value
+      ? nodeAtMarkerPath(options.model.value.nodes, session.path)
+      : null
+    return {
+      ok: true,
+      value: node?.kind === "text" ? node.value : session.originalValue,
+    }
+  }
+
   function setSelectedText(
     value: string,
     mutateOptions?: { immediate?: boolean },
@@ -2007,19 +2373,34 @@ export function useComposerDocument(options: {
     const file = options.editFile.value
     if (!file || !options.model.value || saveConflict.value) return false
     if (options.stagedSource?.value != null) {
-      const patched = patchComposerModelSource(
-        options.stagedSource.value,
-        options.model.value,
-        entry.model,
-      )
-      if (!patched.ok) {
-        saveError.value = patched.reason
+      const targetModel = cloneComposerValue(entry.model)
+      if (entry.source == null) {
+        saveError.value = "The exact Astro source is unavailable. Reload before restoring history."
         return false
       }
-      options.onStagedSourceChange?.(patched.source)
-      applySnapshotLocally(entry)
+      options.onStagedSourceChange?.(entry.source)
+      applySnapshotLocally({ ...entry, model: targetModel }, entry.source)
       dirty.value = true
       return true
+    }
+    const targetModel = cloneComposerValue(entry.model)
+    const sourceBefore = pendingSource ?? options.exactSource?.value ?? null
+    if (sourceBefore == null && options.exactSource) {
+      saveError.value = "The exact Astro source is unavailable. Reload before restoring history."
+      return false
+    }
+    const patched = entry.source != null
+      ? { ok: true as const, source: entry.source }
+      : sourceBefore == null
+        ? null
+        : patchComposerModelSource(
+            sourceBefore,
+            options.model.value,
+            targetModel,
+          )
+    if (patched && !patched.ok) {
+      saveError.value = patched.reason
+      return false
     }
     const targetSheets = new Map(
       entry.stylesheets.map((sheet) => [sheet.relativeFile, sheet]),
@@ -2037,32 +2418,61 @@ export function useComposerDocument(options: {
     saving.value = true
     saveError.value = null
     try {
-      const externalPages = entry.documents.map((document) => {
+      const externalSources = entry.documents.map((document) => {
         const current = documentState.get(document.relativeFile)
+        if (!current) {
+          throw new Error(`The source state for ${document.relativeFile} is unavailable.`)
+        }
+        const patchedDocument = patchComposerModelSource(
+          current.source,
+          current.model,
+          document.model,
+        )
+        if (!patchedDocument.ok) {
+          throw new Error(`${document.relativeFile}: ${patchedDocument.reason}`)
+        }
         return {
           relativeFile: document.relativeFile,
-          model: document.model,
-          expectedMtimeMs: current?.mtimeMs ?? document.mtimeMs,
+          source: patchedDocument.source,
+          expectedSource: current.source,
+          expectedMtimeMs: current.mtimeMs,
         }
       })
       const result = await commitComposerEditTransaction({
         projectPath: options.projectPath.value,
         previewRevision: options.previewRevision?.value,
-        pages: [
-          {
-            relativeFile: file,
-            model: entry.model,
-            expectedMtimeMs: options.editedMtimeMs.value,
-          },
-          ...externalPages.filter((page) => page.relativeFile !== file),
-        ],
+        ...(patched?.ok
+          ? {
+              sources: [{
+                relativeFile: file,
+                source: patched.source,
+                expectedSource: options.exactSource?.value ?? undefined,
+                expectedMtimeMs: options.editedMtimeMs.value,
+              }, ...externalSources.filter((source) => source.relativeFile !== file)],
+            }
+          : {
+              pages: [
+                {
+                  relativeFile: file,
+                  model: targetModel,
+                  expectedMtimeMs: options.editedMtimeMs.value,
+                },
+                ...entry.documents
+                  .filter((page) => page.relativeFile !== file)
+                  .map((page) => ({
+                    relativeFile: page.relativeFile,
+                    model: page.model,
+                    expectedMtimeMs: page.mtimeMs,
+                  })),
+              ],
+            }),
         stylesheets: stylesheetEdits,
       })
       if (!result.ok) throw conflictError(result)
       const revisions = new Map(
         result.revisions.map((revision) => [revision.relativeFile, revision]),
       )
-      const restored = cloneComposerValue(entry)
+      const restored = cloneComposerValue({ ...entry, model: targetModel })
       for (const sheet of restored.stylesheets) {
         const revision = revisions.get(sheet.relativeFile)
         if (revision) {
@@ -2074,10 +2484,18 @@ export function useComposerDocument(options: {
       }
       const pageRevision = revisions.get(file)
       if (pageRevision) options.editedMtimeMs.value = pageRevision.mtimeMs
-      applySnapshotLocally(restored)
+      if (patched?.ok) {
+        pendingSource = null
+        options.onExactSourcePersisted?.(patched.source)
+      }
+      applySnapshotLocally(restored, patched?.ok ? patched.source : undefined)
       for (const document of restored.documents) {
         const revision = revisions.get(document.relativeFile)
         if (revision) document.mtimeMs = revision.mtimeMs
+        const source = externalSources.find(
+          (item) => item.relativeFile === document.relativeFile,
+        )?.source
+        if (source) document.source = source
         documentState.set(document.relativeFile, cloneComposerValue(document))
       }
       dirty.value = false
@@ -2143,6 +2561,8 @@ export function useComposerDocument(options: {
     stylesheetState.clear()
     documentState.clear()
     activePageSlot = null
+    pendingSource = null
+    pendingSourceRevision = 0
     lastKey = null
     lastPush = 0
     dirty.value = false
@@ -2157,6 +2577,8 @@ export function useComposerDocument(options: {
   }
 
   function markSaved(): void {
+    pendingSource = null
+    pendingSourceRevision = 0
     dirty.value = false
     saveError.value = null
     saveConflict.value = null
@@ -2275,6 +2697,9 @@ export function useComposerDocument(options: {
     setSelectedProp,
     renameSelectedProp,
     setSelectedText,
+    beginCanvasTextEdit,
+    updateCanvasTextEdit,
+    finishCanvasTextEdit,
     setSelectedTag,
     commitStylesheetEdit,
     commitModelWithStylesheet,

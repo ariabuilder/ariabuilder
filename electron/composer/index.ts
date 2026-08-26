@@ -64,6 +64,13 @@ export {
   inspectComposerProjectData,
 } from "./projectData";
 export {
+  disposeProjectDataCatalogRegistry,
+  editProjectDataCatalogValue,
+  invalidateProjectDataCatalogRegistry,
+  isProjectDataRegistryChange,
+  listProjectData,
+} from "./projectDataCatalog";
+export {
   applyProjectTranslationCutover,
   assessProjectTranslationAdoption,
   createProjectTranslationDrafts,

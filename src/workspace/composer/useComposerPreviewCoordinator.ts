@@ -22,7 +22,11 @@ const PATCH_ACK_TIMEOUT_MS = 500
 export function useComposerPreviewCoordinator(options: {
   projectPath: Ref<string>
   editFile: Ref<string | null>
-  patchNodes: (payload: { revision: number; patches: ComposerDomPatch[] }) => void
+  patchNodes: (payload: {
+    revision: number
+    patches: ComposerDomPatch[]
+    inlineTextOrigin?: import("../../../shared/composer/canvasText").CanvasTextPatchOrigin
+  }) => void
   reconcile: (payload: { revision: number; paths: string[]; reloadReason?: AriaReloadReason }) => void
 }) {
   const revision = ref(0)
@@ -103,13 +107,18 @@ export function useComposerPreviewCoordinator(options: {
   function applyModelMutation(
     before: AstroDocumentModel,
     after: AstroDocumentModel,
-    mutationOptions?: { writeDraft?: boolean; revision?: number },
+    mutationOptions?: {
+      writeDraft?: boolean
+      revision?: number
+      source?: string
+      inlineTextOrigin?: import("../../../shared/composer/canvasText").CanvasTextPatchOrigin
+    },
   ): ComposerPreviewDiff {
     const file = options.editFile.value
     const diff = classifyComposerPreviewDiff(before, after)
     const nextRevision = mutationOptions?.revision ?? reserveRevision()
     revision.value = Math.max(revision.value, nextRevision)
-    const source = serializeAstro(after)
+    const source = mutationOptions?.source ?? serializeAstro(after)
     if (file) {
       latestMutation = {
         revision: nextRevision,
@@ -121,7 +130,13 @@ export function useComposerPreviewCoordinator(options: {
     }
     if (diff.kind === "dom-patch") {
       if (diff.patches.length && !optimisticDesynced.value) {
-        options.patchNodes({ revision: nextRevision, patches: diff.patches })
+        options.patchNodes({
+          revision: nextRevision,
+          patches: diff.patches,
+          ...(mutationOptions?.inlineTextOrigin
+            ? { inlineTextOrigin: mutationOptions.inlineTextOrigin }
+            : {}),
+        })
         pendingPatches.set(nextRevision, setTimeout(() => {
           recoverLatestPatch(nextRevision)
         }, PATCH_ACK_TIMEOUT_MS))

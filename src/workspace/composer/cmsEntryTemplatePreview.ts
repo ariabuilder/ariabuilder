@@ -36,6 +36,13 @@ export async function createCmsEntryTemplateLaunch(
           slug,
           locale,
         }),
+        version: JSON.stringify([
+          entry.id,
+          entry.filePath ?? null,
+          entry.locale ?? null,
+          entry.data,
+          entry.body ?? null,
+        ]),
       }
     })
   } else {
@@ -56,6 +63,7 @@ export async function createCmsEntryTemplateLaunch(
           slug,
           locale: locale?.locale,
         }),
+        version: record.entry.updatedAt,
       }
     })
   }
@@ -71,11 +79,50 @@ export async function createCmsEntryTemplateLaunch(
     entries,
     selectedEntryId: selected?.id ?? null,
     previewRoute: selected?.route ?? null,
+    sourceKind: collection.source?.kind ?? "aria-managed",
+    writable: !collection.source || (
+      collection.source.kind === "aria-managed" && !collection.source.readOnly
+    ),
+    writableTextFields: [
+      "title",
+      ...(collection.schema?.fields ?? [])
+        .filter((field) => field.type === "string" || field.type === "text")
+        .map((field) => field.key),
+    ],
   }
   return {
     mode: "cms-entry-template",
     name: page.title?.trim() || collection.label,
     file: page.file,
     context,
+  }
+}
+
+/** Use Composer's representative entry when another view needs a concrete URL. */
+export async function resolveCmsEntryTemplatePreviewRoute(
+  projectPath: string,
+  page: ScanPage,
+): Promise<string | null> {
+  const launch = await createCmsEntryTemplateLaunch(projectPath, page)
+  return launch.context.previewRoute
+}
+
+export async function resolveCmsEntryTemplatePreviewTarget(
+  projectPath: string,
+  page: ScanPage,
+): Promise<{ previewRoute: string; cacheKey: string } | null> {
+  const launch = await createCmsEntryTemplateLaunch(projectPath, page)
+  const selected = launch.context.entries.find(
+    (entry) => entry.id === launch.context.selectedEntryId,
+  )
+  if (!selected || !launch.context.previewRoute) return null
+  return {
+    previewRoute: launch.context.previewRoute,
+    cacheKey: JSON.stringify([
+      launch.context.collectionId,
+      selected.id,
+      selected.route,
+      selected.version ?? null,
+    ]),
   }
 }

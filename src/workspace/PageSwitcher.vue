@@ -18,6 +18,12 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -69,6 +75,7 @@ import type {
   ScanPage,
   ScanComponent,
   WorkspaceActiveDocument,
+  WorkspaceComposerCanvasTarget,
   WorkspaceRailId,
 } from "@/workspace/types"
 import type { ColorScheme, ThemeId } from "../../shared/appearance"
@@ -119,11 +126,22 @@ type WorkspaceCommandResult = {
     | "start-preview"
 }
 
+type ComposerCanvasResult = {
+  kind: "canvas"
+  id: string
+  label: string
+  detail: string
+  targetId: string
+  documentKind: "component" | "layout"
+  current?: boolean
+}
+
 type SwitcherResult =
   | GlobalSearchResult
   | CreateResult
   | AppearanceResult
   | WorkspaceCommandResult
+  | ComposerCanvasResult
 type SwitcherKind = SwitcherResult["kind"]
 type ActiveDocumentResult = Extract<
   GlobalSearchResult,
@@ -138,6 +156,10 @@ const props = defineProps<{
   selectedRoute: string | null
   currentRail: WorkspaceRailId
   activeDocument?: WorkspaceActiveDocument | null
+  composerEditTrail?: WorkspaceActiveDocument[]
+  composerCanvasTargets?: WorkspaceComposerCanvasTarget[]
+  onComposerBreadcrumbSelect?: (index: number) => Promise<void> | void
+  onOpenComposerCanvasTarget?: (id: string) => Promise<boolean> | boolean
   onSelect: (route: string) => Promise<void> | void
   onSelectRail: (rail: WorkspaceRailId) => Promise<void> | void
   onRefresh: () => Promise<void> | void
@@ -175,6 +197,30 @@ const current = computed(
   () => props.pages.find((page) => page.route === props.selectedRoute) ?? null,
 )
 const isComposer = computed(() => props.currentRail === "composer")
+const composerEditTrail = computed(() => props.composerEditTrail ?? [])
+const composerLeaf = computed(() => composerEditTrail.value.at(-1) ?? null)
+const composerLibrary = computed(() => {
+  const kind = composerEditTrail.value[0]?.kind ?? props.activeDocument?.kind ?? "page"
+  if (kind === "component") {
+    return { label: "Components", rail: "components" as const }
+  }
+  if (kind === "layout") {
+    return { label: "Layouts", rail: "layouts" as const }
+  }
+  return { label: "Pages", rail: "pages" as const }
+})
+const composerAncestors = computed(() => composerEditTrail.value.slice(0, -1))
+const hiddenComposerAncestors = computed(() =>
+  composerAncestors.value.length > 3
+    ? composerAncestors.value.slice(1, -1)
+    : [],
+)
+const visibleComposerAncestors = computed(() => {
+  const ancestors = composerAncestors.value
+  return ancestors.length > 3
+    ? [ancestors[0]!, ancestors.at(-1)!]
+    : ancestors
+})
 const activeNonPageDocument = computed(() => {
   const document = props.activeDocument
   return document && document.kind !== "page" ? document : null
@@ -185,6 +231,18 @@ const triggerLabel = computed(() =>
     : isComposer.value && current.value
       ? pageDisplayName(current.value.file)
     : m.global_search_trigger(),
+)
+
+const composerCanvasResults = computed<ComposerCanvasResult[]>(() =>
+  (props.composerCanvasTargets ?? []).map((target) => ({
+    kind: "canvas",
+    id: `canvas:${target.id}`,
+    label: target.label,
+    detail: target.detail,
+    targetId: target.id,
+    documentKind: target.kind,
+    current: target.current,
+  })),
 )
 
 const activeDocumentResult = computed<ActiveDocumentResult | null>(() => {
@@ -370,6 +428,14 @@ function updateCreateLayoutField(name: string, value: string | boolean) {
 }
 
 const allResults = computed<SwitcherResult[]>(() => [
+  ...(isComposer.value
+    ? composerCanvasResults.value.filter((result) => {
+        const normalizedQuery = query.value.trim().toLocaleLowerCase()
+        return !normalizedQuery
+          || result.label.toLocaleLowerCase().includes(normalizedQuery)
+          || result.detail.toLocaleLowerCase().includes(normalizedQuery)
+      })
+    : []),
   ...searchedCommands.value,
   ...searchResults.value.filter(
     (result) => result.kind !== "command" && result.id !== "destination:history",
@@ -383,6 +449,7 @@ const visibleResults = computed(() => {
   const base = normalizedQuery
     ? allResults.value
     : [
+        ...(isComposer.value ? composerCanvasResults.value : []),
         ...documentResults.value,
         ...workspaceCommands.value,
       ]
@@ -405,6 +472,7 @@ const visibleResults = computed(() => {
 })
 
 function isCurrentResult(result: SwitcherResult): boolean {
+  if (result.kind === "canvas") return Boolean(result.current)
   const active = activeDocumentResult.value
   if (active) return result.id === active.id
   if (props.activeDocument?.kind === "page" && result.kind === "page") {
@@ -414,6 +482,7 @@ function isCurrentResult(result: SwitcherResult): boolean {
 }
 
 const GROUPS: Array<{ kind: SwitcherKind; label: () => string }> = [
+  { kind: "canvas", label: () => "On this canvas" },
   { kind: "page", label: () => m.global_search_group_pages() },
   { kind: "component", label: () => m.global_search_group_components() },
   { kind: "layout", label: () => m.global_search_group_layouts() },
@@ -431,7 +500,7 @@ const groups = computed(() => {
     results: visibleResults.value.filter((result) => result.kind === group.kind),
   })).filter((group) => group.results.length > 0)
   const activeKind = activeDocumentResult.value?.kind
-  return activeKind
+  return activeKind && !isComposer.value
     ? grouped.sort(
         (a, b) => Number(b.kind === activeKind) - Number(a.kind === activeKind),
       )
@@ -440,6 +509,10 @@ const groups = computed(() => {
 
 function iconFor(result: SwitcherResult) {
   switch (result.kind) {
+    case "canvas":
+      return result.documentKind === "layout"
+        ? ("layouts" as const)
+        : ("components" as const)
     case "create":
       return result.entity === "page"
         ? ("pages" as const)
@@ -519,6 +592,23 @@ function setOpen(next: boolean) {
   }
 }
 
+async function openComposerLibrary() {
+  try {
+    if (!(await guardDirtyNavigation(props.projectPath))) return
+    await props.onSelectRail(composerLibrary.value.rail)
+  } catch (error) {
+    toast.error(m.global_search_command_failed(), {
+      description: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+async function selectComposerAncestor(entry: WorkspaceActiveDocument) {
+  const index = composerEditTrail.value.indexOf(entry)
+  if (index < 0) return
+  await props.onComposerBreadcrumbSelect?.(index)
+}
+
 async function openCreate(entity: "page" | "component" | "layout") {
   try {
     if (!(await guardDirtyNavigation(props.projectPath))) return
@@ -592,6 +682,11 @@ async function submitCreate(name: string) {
 }
 
 async function activate(result: SwitcherResult) {
+  if (result.kind === "canvas") {
+    const opened = await props.onOpenComposerCanvasTarget?.(result.targetId)
+    if (opened) setOpen(false)
+    return
+  }
   if (activeDocumentResult.value?.id === result.id) {
     setOpen(false)
     return
@@ -758,7 +853,92 @@ defineExpose({
   </Teleport>
 
   <Popover :open="open" @update:open="setOpen">
-    <PopoverTrigger as-child>
+    <nav
+      v-if="isComposer && composerLeaf"
+      class="flex min-w-0 max-w-[min(42vw,34rem)] items-center gap-0.5 overflow-hidden text-xs"
+      aria-label="Composer location"
+      data-aria-composer-edit-stack
+    >
+      <button
+        type="button"
+        class="shrink-0 rounded-sm px-1.5 py-1 font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-[0.5px] focus-visible:ring-ring/70"
+        @click="openComposerLibrary"
+      >
+        {{ composerLibrary.label }}
+      </button>
+      <span class="shrink-0 text-muted-foreground/40" aria-hidden="true">/</span>
+
+      <template v-for="entry in visibleComposerAncestors" :key="entry.file">
+        <button
+          type="button"
+          class="min-w-0 max-w-36 truncate rounded-sm px-1.5 py-1 font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-[0.5px] focus-visible:ring-ring/70"
+          @click="selectComposerAncestor(entry)"
+        >
+          {{ entry.name }}
+        </button>
+        <span class="shrink-0 text-muted-foreground/40" aria-hidden="true">/</span>
+
+        <DropdownMenu
+          v-if="entry === visibleComposerAncestors[0] && hiddenComposerAncestors.length"
+        >
+          <DropdownMenuTrigger as-child>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              class="size-6! shrink-0 text-muted-foreground"
+              aria-label="Show hidden locations"
+            >
+              <AppIcon name="moreHorizontal" :size="13" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" class="w-48">
+            <DropdownMenuItem
+              v-for="hiddenEntry in hiddenComposerAncestors"
+              :key="hiddenEntry.file"
+              @select="selectComposerAncestor(hiddenEntry)"
+            >
+              <AppIcon
+                :name="hiddenEntry.kind === 'layout' ? 'layouts' : hiddenEntry.kind === 'component' ? 'components' : 'pages'"
+                :size="14"
+                aria-hidden="true"
+              />
+              <span class="truncate">{{ hiddenEntry.name }}</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+          <span class="shrink-0 text-muted-foreground/40" aria-hidden="true">/</span>
+        </DropdownMenu>
+      </template>
+
+      <PopoverTrigger as-child>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          :disabled="disabled"
+          :title="`Quick Open: ${composerLeaf.name}`"
+          :aria-label="`Quick Open from ${composerLeaf.name}`"
+          :aria-keyshortcuts="shortcutAria"
+          :aria-expanded="open"
+          aria-haspopup="dialog"
+          aria-current="page"
+          class="relative min-w-0 max-w-44 gap-1.5 rounded-sm! px-1.5 text-xs font-medium text-foreground! focus-visible:ring-[0.5px] focus-visible:ring-ring/70"
+        >
+          <span class="truncate">{{ composerLeaf.name }}</span>
+          <AppIcon
+            name="chevronDown"
+            :size="12"
+            data-slot="shortcut-hint-alternate"
+            class="shrink-0 opacity-60"
+          />
+          <ShortcutHint class="absolute -right-0.5 top-1/2 -translate-y-1/2">
+            {{ shortcutLabel }}
+          </ShortcutHint>
+        </Button>
+      </PopoverTrigger>
+    </nav>
+
+    <PopoverTrigger v-else as-child>
       <Button
         type="button"
         variant="ghost"

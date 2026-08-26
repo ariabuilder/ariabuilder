@@ -151,6 +151,20 @@ export function inspectComposerProjectData(
   return api().inspectProjectData(projectPath, input);
 }
 
+export function listComposerProjectData(
+  projectPath: string,
+  input: import("../../shared/composer").ProjectDataCatalogInput,
+) {
+  return api().listProjectData(projectPath, JSON.parse(JSON.stringify(input)));
+}
+
+export function editComposerProjectDataCatalogValue(
+  projectPath: string,
+  input: import("../../shared/composer").ProjectDataCatalogEditInput,
+) {
+  return api().editProjectDataCatalogValue(projectPath, JSON.parse(JSON.stringify(input)));
+}
+
 export function assessComposerProjectDataAdoption(
   projectPath: string,
   input: import("../../shared/composer").ProjectDataAdoptionInput,

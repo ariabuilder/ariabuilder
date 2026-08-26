@@ -1,0 +1,4 @@
+.astro/
+dist/
+src/aria/
+src/middleware.ts

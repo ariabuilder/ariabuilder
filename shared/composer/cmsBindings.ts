@@ -1,5 +1,6 @@
 import { allocNodeId, locateAtPath } from "./mutate";
-import type { AstroDocumentModel, MapNode, PropValue } from "./types";
+import { isComposerRichTextHost } from "./richText";
+import type { AstroDocumentModel, EditableNode, MapNode, PropValue } from "./types";
 import { detectAstroCollectionsAtPath } from "./collectionBindings";
 
 export type CmsFilterOperator =
@@ -67,9 +68,33 @@ export type CmsBindingFormat =
 
 export type CmsContentExposure = "editable" | "locked" | "hidden";
 
+export type DirectCmsTextBinding = {
+  path: string;
+  collection: string;
+  entrySlug: string;
+  contextVariable: string;
+  field: string;
+  relation?: CmsRelationTraversal;
+  contentExposure: CmsContentExposure;
+};
+
+export type DirectCmsPropBinding = DirectCmsTextBinding & {
+  propName: string;
+};
+
+export type CmsRelationTraversal = {
+  sourceField: string;
+  targetCollection: string;
+  targetField: string;
+  kind: "reference" | "relation";
+  index?: number;
+  lookupVariable: string;
+};
+
 export type CmsBinding = {
   contextVariable: string;
   field: string;
+  relation?: CmsRelationTraversal;
   format?: CmsBindingFormat;
   contentExposure?: CmsContentExposure;
   fallback?: PropValue;
@@ -84,7 +109,10 @@ export type CmsMutationResult = {
 
 const QUERY_START = (id: string) => `/* @aria-cms-query:${id} */`;
 const QUERY_END = (id: string) => `/* @aria-cms-query-end:${id} */`;
+const LOOKUP_START = (id: string) => `/* @aria-cms-lookup:${id} */`;
+const LOOKUP_END = (id: string) => `/* @aria-cms-lookup-end:${id} */`;
 const FALLBACK_MARKER = "/* @aria-cms-fallback */";
+const FIELD_MARKER = (field: string) => `/* @aria-cms-field:${field.replace(/\*\//g, "")} */`;
 const CONTENT_EXPOSURE_PATTERN = /\/\*\s*@aria-content:(editable|locked|hidden)\s*\*\/\s*/g;
 
 function identifier(value: string, fallback = "value"): string {
@@ -118,6 +146,13 @@ function fieldAccess(variable: string, field: string): string {
   );
 }
 
+function plainFieldAccess(variable: string, field: string): string {
+  return field.split(".").filter(Boolean).reduce(
+    (expr, segment) => `${expr}?.[${js(segment)}]`,
+    variable,
+  );
+}
+
 function propFallback(value: PropValue | undefined): string | null {
   if (!value) return null;
   switch (value.type) {
@@ -139,13 +174,32 @@ function formatExpression(expression: string, format: CmsBindingFormat = "plain"
 }
 
 export function compileCmsBindingExpression(binding: CmsBinding): string {
-  const source = fieldAccess(identifier(binding.contextVariable, "entry"), binding.field);
+  const context = identifier(binding.contextVariable, "entry");
+  const directSource = fieldAccess(context, binding.field);
+  const relationId = binding.relation
+    ? fieldAccess(context, binding.relation.sourceField)
+    : "";
+  const relatedId = binding.relation?.kind === "relation"
+    ? `(Array.isArray(${relationId}) ? ${relationId}[${Math.max(0, Math.floor(binding.relation.index ?? 0))}] : undefined)`
+    : relationId;
+  const relatedKey = binding.relation
+    ? `((${relatedId})?.id ?? (${relatedId})?.slug ?? (${relatedId})?.ariaEntryId ?? ${relatedId})`
+    : "";
+  const relatedEntry = binding.relation
+    ? `${identifier(binding.relation.lookupVariable, "ariaCmsLookup")}.get(String(${relatedKey} ?? ""))`
+    : "";
+  const source = binding.relation
+    ? plainFieldAccess(relatedEntry, binding.relation.targetField)
+    : directSource;
   const formatted = formatExpression(source, binding.format);
   const fallback = propFallback(binding.fallback);
   const expression = fallback ? `${formatted} ?? ${FALLBACK_MARKER} ${fallback}` : formatted;
-  return binding.contentExposure
-    ? `/* @aria-content:${binding.contentExposure} */ ${expression}`
+  const marked = binding.relation || binding.field.includes(".")
+    ? `${FIELD_MARKER(binding.field)} ${expression}`
     : expression;
+  return binding.contentExposure
+    ? `/* @aria-content:${binding.contentExposure} */ ${marked}`
+    : marked;
 }
 
 export function parseCmsContentExposure(expression: string): CmsContentExposure {
@@ -242,6 +296,72 @@ export function upsertCmsCollectionQuery(
   return { variable: compiled.variable, entryVariable: compiled.entryVariable };
 }
 
+function lookupId(collection: string): string {
+  return identifier(collection, "collection");
+}
+
+function lookupVariableForId(frontmatter: string, id: string): string | null {
+  const pattern = new RegExp(`${escapeRegExp(LOOKUP_START(id))}\\s*const\\s+([a-zA-Z_$][\\w$]*)\\s*=`);
+  return pattern.exec(frontmatter)?.[1] ?? null;
+}
+
+function uniqueLookupVariable(frontmatter: string, collection: string): string {
+  const base = identifier(`aria cms ${collection} by id`, "ariaCmsEntriesById");
+  if (!new RegExp(`\\b${escapeRegExp(base)}\\b`).test(frontmatter)) return base;
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${base}${index}`;
+    if (!new RegExp(`\\b${escapeRegExp(candidate)}\\b`).test(frontmatter)) return candidate;
+  }
+  return `${base}${Date.now().toString(36)}`;
+}
+
+/** Add or reuse an Astro lookup for one related collection. */
+export function upsertCmsRelationLookup(
+  model: AstroDocumentModel,
+  collection: string,
+): string {
+  const id = lookupId(collection);
+  const existing = lookupVariableForId(model.extraFrontmatter, id);
+  if (existing) return existing;
+  const variable = uniqueLookupVariable(model.extraFrontmatter, collection);
+  const block = `${LOOKUP_START(id)}\nconst ${variable} = new Map((await getCollection(${js(collection)})).flatMap((entry) => {\n  const value = { ...entry.data, id: entry.id, slug: entry.data.slug ?? entry.id, title: entry.data.title ?? entry.id, body: entry.body, ariaEntryId: entry.data.ariaEntryId };\n  return [entry.id, entry.data.slug, entry.data.ariaEntryId].filter(Boolean).map((key) => [String(key), value]);\n}));\n${LOOKUP_END(id)}`;
+  const imported = ensureGetCollectionImport(model.extraFrontmatter);
+  model.extraFrontmatter = `${imported.trim()}${imported.trim() ? "\n\n" : ""}${block}`;
+  return variable;
+}
+
+function removeUnusedGetCollectionImport(frontmatter: string): string {
+  const importPattern = /import\s*\{([^}]*)\}\s*from\s*["']astro:content["'];?/;
+  const match = importPattern.exec(frontmatter);
+  if (!match?.[1]) return frontmatter;
+  const names = match[1].split(",").map((name) => name.trim()).filter(Boolean);
+  if (!names.includes("getCollection")) return frontmatter;
+  const retained = names.filter((name) => name !== "getCollection");
+  const replacement = retained.length
+    ? `import { ${retained.join(", ")} } from "astro:content";`
+    : "";
+  const withoutImport = `${frontmatter.slice(0, match.index)}${replacement}${frontmatter.slice(match.index + match[0].length)}`;
+  return /\bgetCollection\b/.test(withoutImport) ? frontmatter : withoutImport;
+}
+
+/** Remove managed lookups and queries whose variables are no longer used by the document. */
+export function pruneUnusedCmsArtifacts(model: AstroDocumentModel): void {
+  const serializedNodes = JSON.stringify(model.nodes);
+  const lookupPattern = /\/\* @aria-cms-lookup:([^*]+) \*\*?\/[\s\S]*?\/\* @aria-cms-lookup-end:\1 \*\*?\//g;
+  model.extraFrontmatter = model.extraFrontmatter.replace(lookupPattern, (block, id: string) => {
+    const variable = lookupVariableForId(block, id.trim());
+    return variable && serializedNodes.includes(variable) ? block : "";
+  });
+  const queryIds = [...model.extraFrontmatter.matchAll(/\/\* @aria-cms-query:([^*]+) \*\//g)]
+    .map((match) => match[1]?.trim())
+    .filter((id): id is string => Boolean(id));
+  for (const id of queryIds) removeQueryBlock(model, id);
+  model.extraFrontmatter = model.extraFrontmatter.replace(/\n{3,}/g, "\n\n").trim();
+  if (!model.extraFrontmatter.includes("@aria-cms-query:") && !model.extraFrontmatter.includes("@aria-cms-lookup:")) {
+    model.extraFrontmatter = removeUnusedGetCollectionImport(model.extraFrontmatter).trim();
+  }
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -257,11 +377,7 @@ function removeQueryBlock(model: AstroDocumentModel, id: string): void {
   const pattern = new RegExp(`\\s*${escapeRegExp(QUERY_START(id))}[\\s\\S]*?${escapeRegExp(QUERY_END(id))}\\s*`);
   model.extraFrontmatter = model.extraFrontmatter.replace(pattern, "\n\n").trim();
   if (!model.extraFrontmatter.includes("@aria-cms-query:")) {
-    model.extraFrontmatter = model.extraFrontmatter
-      .replace(/import\s*\{([^}]*)\}\s*from\s*["']astro:content["'];?/, (_full, raw: string) => {
-        const names = raw.split(",").map((name) => name.trim()).filter((name) => name && name !== "getCollection");
-        return names.length ? `import { ${names.join(", ")} } from "astro:content";` : "";
-      })
+    model.extraFrontmatter = removeUnusedGetCollectionImport(model.extraFrontmatter)
       .replace(/^\s+|\s+$/g, "");
   }
 }
@@ -483,17 +599,202 @@ function exactCollectionStatement(
     : null;
 }
 
-function expressionField(expression: string, contexts: readonly string[]): string | null {
-  const source = expression.replace(/^\{|\}$/g, "").replace(/\?/g, "");
+function expressionPathForContext(expression: string, context: string): string | null {
+  const match = new RegExp(`\\b${escapeRegExp(context)}\\?*\\.data\\b`).exec(expression);
+  if (!match) return null;
+  let tail = expression.slice(match.index + match[0].length);
+  const segments: string[] = [];
+  while (tail) {
+    const bracket = /^\?*\.\[\s*(["'])([^"']+)\1\s*\]/.exec(tail);
+    if (bracket?.[2]) {
+      segments.push(bracket[2]);
+      tail = tail.slice(bracket[0].length);
+      continue;
+    }
+    const property = /^\?*\.([a-zA-Z_$][\w$]*)/.exec(tail);
+    if (property?.[1]) {
+      segments.push(property[1]);
+      tail = tail.slice(property[0].length);
+      continue;
+    }
+    break;
+  }
+  return segments.length ? segments.join(".") : null;
+}
+
+export function cmsBindingFieldFromExpression(expression: string, contexts: readonly string[] = []): string | null {
+  const source = expression.replace(/^\{|\}$/g, "");
+  const marked = /\/\*\s*@aria-cms-field:([^*]+?)\s*\*\//.exec(source)?.[1]?.trim();
+  if (marked) return marked;
   for (const context of contexts) {
+    const field = expressionPathForContext(source, context);
+    if (field) return field;
     const escaped = escapeRegExp(context);
-    const bracket = new RegExp(`\\b${escaped}\\.data(?:\\[(["'])([^"']+)\\1\\]|\\.([a-zA-Z_$][\\w$]*))`).exec(source);
-    if (bracket) return bracket[2] ?? bracket[3] ?? null;
     if (new RegExp(`\\b${escaped}\\.(id|slug|body)\\b`).test(source)) {
       return new RegExp(`\\b${escaped}\\.(id|slug|body)\\b`).exec(source)?.[1] ?? null;
     }
   }
   return null;
+}
+
+function relationTraversalFromExpression(
+  frontmatter: string,
+  expression: string,
+  contextVariable: string,
+  field: string,
+): CmsRelationTraversal | undefined {
+  const lookupVariable = /\b([a-zA-Z_$][\w$]*)\.get\(\s*String\(/.exec(expression)?.[1];
+  if (!lookupVariable) return undefined;
+  const lookupPattern = new RegExp(
+    `/\\* @aria-cms-lookup:[^*]+ \\*/[\\s\\S]*?const\\s+${escapeRegExp(lookupVariable)}\\s*=[\\s\\S]*?getCollection\\(\\s*(["'])([^"']+)\\1\\s*\\)`,
+  );
+  const targetCollection = lookupPattern.exec(frontmatter)?.[2];
+  const sourceField = expressionPathForContext(expression, contextVariable);
+  if (!targetCollection || !sourceField) return undefined;
+  const kind = expression.includes("Array.isArray(") ? "relation" : "reference";
+  const prefix = kind === "relation" ? `${sourceField}.0.` : `${sourceField}.`;
+  const targetField = field.startsWith(prefix) ? field.slice(prefix.length) : "";
+  if (!targetField) return undefined;
+  return {
+    sourceField,
+    targetCollection,
+    targetField,
+    kind,
+    ...(kind === "relation" ? { index: 0 } : {}),
+    lookupVariable,
+  };
+}
+
+function directEntrySlug(
+  frontmatter: string,
+  variable: string,
+): { collection: string; entrySlug: string } | null {
+  const queryId = managedQueryIdForVariable(frontmatter, variable);
+  if (!queryId) return null;
+  const blockPattern = new RegExp(
+    `${escapeRegExp(QUERY_START(queryId))}\\s*const\\s+${escapeRegExp(variable)}\\s*=([\\s\\S]*?)${escapeRegExp(QUERY_END(queryId))}`,
+  );
+  const source = blockPattern.exec(frontmatter)?.[1] ?? "";
+  const collection = /getCollection\(\s*(["'])([^"']+)\1\s*\)/.exec(source)?.[2];
+  const entrySlug = /(?:\.data\??(?:\.slug|\.\[\s*["']slug["']\s*\])|\.slug|\.id)(?:\s*\?\?[^=]+)?\s*===\s*(["'])([^"']+)\1/.exec(source)?.[2];
+  return collection && entrySlug ? { collection, entrySlug } : null;
+}
+
+const INLINE_TEXT_WRAPPER_TAGS = new Set([
+  "abbr", "b", "bdi", "bdo", "cite", "code", "data", "del", "dfn",
+  "em", "i", "ins", "kbd", "mark", "q", "ruby", "s", "samp", "small",
+  "span", "strong", "sub", "sup", "time", "u", "var",
+]);
+
+function meaningfulChild(
+  node: EditableNode,
+): { node: EditableNode; index: number } | null {
+  if (node.kind !== "element" && node.kind !== "component") return null;
+  const children = (node.children ?? []).flatMap((child, index) =>
+    child.kind === "text" && !child.value.trim() ? [] : [{ node: child, index }],
+  );
+  return children.length === 1 ? children[0]! : null;
+}
+
+function directManagedExpressionIndex(node: EditableNode): number | null {
+  if (node.kind !== "element" && node.kind !== "component") return null;
+  const indexes = (node.children ?? []).flatMap((child, index) =>
+    child.kind === "expr" && child.value.includes("@aria-cms-fallback")
+      ? [index]
+      : [],
+  );
+  return indexes.length === 1 ? indexes[0]! : null;
+}
+
+/** Resolve one unambiguous text target without crossing a component or block boundary. */
+export function resolveComposerTextTargetPath(
+  model: AstroDocumentModel,
+  selectedPath: string,
+): string | null {
+  let path = selectedPath;
+  let node = locateAtPath(model.nodes, path)?.node ?? null;
+  if (!node) return null;
+  if (node.kind === "text" || node.kind === "expr") return path;
+
+  const managedIndex = directManagedExpressionIndex(node);
+  if (managedIndex != null) return `${path}.${managedIndex}`;
+
+  const direct = meaningfulChild(node);
+  if (!direct) return null;
+  path = `${path}.${direct.index}`;
+  node = direct.node;
+  if (node.kind === "text" || node.kind === "expr") return path;
+
+  const selected = locateAtPath(model.nodes, selectedPath)?.node;
+  if (!isComposerRichTextHost(selected)) return null;
+  while (
+    node.kind === "element" &&
+    INLINE_TEXT_WRAPPER_TAGS.has(node.name.toLowerCase())
+  ) {
+    const next = meaningfulChild(node);
+    if (!next) return null;
+    path = `${path}.${next.index}`;
+    node = next.node;
+    if (node.kind === "text" || node.kind === "expr") return path;
+  }
+  return null;
+}
+
+/** Resolve a managed single-entry CMS text binding without evaluating project code. */
+export function resolveDirectCmsTextBinding(
+  model: AstroDocumentModel,
+  selectedPath: string,
+): DirectCmsTextBinding | null {
+  const path = resolveComposerTextTargetPath(model, selectedPath);
+  if (!path) return null;
+  const node = locateAtPath(model.nodes, path)?.node;
+  if (node?.kind !== "expr") return null;
+  const expression = node.value.replace(/^\{|\}$/g, "");
+  const contextVariable = /\b([a-zA-Z_$][\w$]*)\?*\.data\b/.exec(expression)?.[1];
+  const field = contextVariable ? cmsBindingFieldFromExpression(expression, [contextVariable]) : null;
+  if (!contextVariable || !field) return null;
+  const owner = directEntrySlug(model.extraFrontmatter, contextVariable);
+  if (!owner) return null;
+  return {
+    path,
+    collection: owner.collection,
+    entrySlug: owner.entrySlug,
+    contextVariable,
+    field,
+    relation: relationTraversalFromExpression(model.extraFrontmatter, expression, contextVariable, field),
+    contentExposure: parseCmsContentExposure(node.value),
+  };
+}
+
+/** Resolve a managed single-entry prop binding without evaluating project code. */
+export function resolveDirectCmsPropBinding(
+  model: AstroDocumentModel,
+  selectedPath: string,
+  propName: string,
+): DirectCmsPropBinding | null {
+  const selected = locateAtPath(model.nodes, selectedPath)?.node;
+  if (!selected || !(selected.kind === "element" || selected.kind === "component" || selected.kind === "slot" || selected.kind === "raw")) {
+    return null;
+  }
+  const prop = selected.props[propName];
+  if (prop?.type !== "expr") return null;
+  const expression = prop.value.replace(/^\{|\}$/g, "");
+  const contextVariable = /\b([a-zA-Z_$][\w$]*)\?*\.data\b/.exec(expression)?.[1]
+    ?? /\b([a-zA-Z_$][\w$]*)\.get\(/.exec(expression)?.[1];
+  const field = cmsBindingFieldFromExpression(expression, contextVariable ? [contextVariable] : []);
+  if (!contextVariable || !field) return null;
+  const owner = directEntrySlug(model.extraFrontmatter, contextVariable);
+  if (!owner) return null;
+  return {
+    path: selectedPath,
+    propName,
+    collection: owner.collection,
+    entrySlug: owner.entrySlug,
+    contextVariable,
+    field,
+    relation: relationTraversalFromExpression(model.extraFrontmatter, expression, contextVariable, field),
+    contentExposure: parseCmsContentExposure(prop.value),
+  };
 }
 
 function nodeChildren(node: import("./types").EditableNode): import("./types").EditableNode[] {
@@ -522,19 +823,6 @@ function bindingCount(node: import("./types").EditableNode, contexts: readonly s
   return count;
 }
 
-function textTargetPath(
-  node: import("./types").EditableNode,
-  path: string,
-): string | null {
-  if (node.kind === "text" || node.kind === "expr") return path;
-  if (node.kind !== "element" && node.kind !== "component") return null;
-  const children = node.children ?? [];
-  if (children.length !== 1) return null;
-  return children[0]?.kind === "text" || children[0]?.kind === "expr"
-    ? `${path}.0`
-    : null;
-}
-
 /** Semantic CMS state shared by Inspector, Layers, and the canvas toolbar. */
 export function describeComposerCmsSelection(
   model: AstroDocumentModel,
@@ -542,11 +830,29 @@ export function describeComposerCmsSelection(
 ): ComposerCmsSelectionDescriptor {
   const loc = locateAtPath(model.nodes, path);
   const node = loc?.node ?? null;
-  const contexts = detectCmsContext(model, path);
-  const collections = detectAstroCollectionsAtPath(model, path);
+  const directTextBinding = resolveDirectCmsTextBinding(model, path);
+  const contexts = [
+    ...new Set([
+      ...detectCmsContext(model, path),
+      ...(directTextBinding ? [directTextBinding.contextVariable] : []),
+    ]),
+  ];
+  const collections = [
+    ...new Set([
+      ...detectAstroCollectionsAtPath(model, path),
+      ...(directTextBinding ? [directTextBinding.collection] : []),
+    ]),
+  ];
   let ownership: ComposerCmsSelectionOwnership = collections.length ? "custom" : "none";
   let managedQueryId: string | null = null;
-  let collection = collections[0] ?? null;
+  let collection = directTextBinding?.collection ?? collections[0] ?? null;
+  if (directTextBinding) {
+    ownership = "managed";
+    managedQueryId = managedQueryIdForVariable(
+      model.extraFrontmatter,
+      directTextBinding.contextVariable,
+    );
+  }
   if (node?.kind === "map") {
     const receiver = mapReceiver(node);
     if (receiver) {
@@ -561,9 +867,11 @@ export function describeComposerCmsSelection(
       }
     }
   }
-  const field = node?.kind === "expr"
-    ? expressionField(node.value, contexts)
-    : null;
+  const field = directTextBinding?.field ?? (
+    node?.kind === "expr"
+      ? cmsBindingFieldFromExpression(node.value, contexts)
+      : null
+  );
   const count = node ? bindingCount(node, contexts) : 0;
   const label = collection
     ? collection.replace(/[-_]+/g, " ").replace(/^./, (value) => value.toUpperCase())
@@ -585,13 +893,13 @@ export function describeComposerCmsSelection(
     bindingCount: count,
     ownership,
     managedQueryId,
-    canBindText: Boolean(node && textTargetPath(node, path)),
+    canBindText: Boolean(node && resolveComposerTextTargetPath(model, path)),
     canBindProps: Boolean(node && "props" in node),
     canRepeat: Boolean(node && (
       node.kind === "map" ||
       ((node.kind === "element" || node.kind === "component" || node.kind === "fragment" || node.kind === "slot") && node.children !== null)
     )),
-    textTargetPath: node ? textTargetPath(node, path) : null,
+    textTargetPath: node ? resolveComposerTextTargetPath(model, path) : null,
     summary,
   };
 }

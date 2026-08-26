@@ -36,7 +36,7 @@ function getHeadClass(columnId: string, canSort: boolean): string {
   const isCover = columnId === "cover"
 
   return cn(
-    "sticky h-9 select-none bg-card/20! py-2.5 font-mono text-[10px] font-normal tracking-wider",
+    "sticky h-9 select-none bg-sidebar! py-2.5 font-mono text-[10px] font-normal tracking-wider",
     isSelect
       ? "pl-5 pr-2 text-muted-foreground/50"
       : isCover
@@ -70,7 +70,7 @@ function getAriaSort(column: Column<unknown, unknown>): "ascending" | "descendin
   <div
     :class="
       cn(
-        'border-y border-dashed border-border bg-background',
+        'border-y border-dashed border-border bg-sidebar',
         props.sticky ? 'sticky top-0 z-20' : undefined,
       )
     "

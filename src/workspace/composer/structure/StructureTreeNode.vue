@@ -212,6 +212,12 @@ const isSelectedBranch = computed(() =>
 const isDropRow = computed(
   () => props.dropCandidate?.targetPath === props.row.path && props.dropCandidate.valid,
 )
+const hasLayerActions = computed(() => Boolean(
+  props.row.hasMotion ||
+  props.row.translationBinding ||
+  props.row.hasCmsBinding ||
+  props.row.hasDataBinding,
+))
 const isMountingChildren = computed(
   () => isExpanded.value && renderedChildLimit.value < props.row.children.length,
 )
@@ -237,7 +243,7 @@ const canRename = computed(() =>
   !props.row.presentationOnly &&
   !props.row.sourceLocked &&
   props.row.deletable &&
-  props.row.kind === "element",
+  (props.row.kind === "element" || props.row.kind === "component"),
 )
 
 watch(isRenaming, async (active) => {
@@ -253,6 +259,14 @@ watch(isRenaming, async (active) => {
 
 function startRename() {
   if (canRename.value) emit("rename-start", props.row)
+}
+
+function handleLabelDoubleClick() {
+  if (!isActiveDocumentRoot.value && props.row.kind === "component") {
+    emit("open", props.row)
+    return
+  }
+  startRename()
 }
 
 function commitRename() {
@@ -368,9 +382,13 @@ function canHostChildren(): boolean {
         :data-layer-path="row.path"
         :data-layer-region="row.region"
         :data-layer-no-drag="!row.draggable ? 'true' : undefined"
+        :data-layer-selected="isSelected ? 'true' : undefined"
+        :data-layer-active-document-root="isActiveDocumentRoot ? 'true' : undefined"
+        :data-layer-canvas-hovered="isCanvasHovered ? 'true' : undefined"
+        :data-layer-drop-inside="dropPosition === 'inside' ? 'true' : undefined"
         :class="
           cn(
-            'group/layer relative mx-1 flex h-7.5 min-w-0 items-center border border-transparent text-foreground outline-none transition-colors rounded-sm',
+            'layer-row group/layer relative mx-1 flex h-7.5 min-w-0 items-center border border-transparent text-foreground outline-none transition-colors rounded-sm',
             isActiveDocumentRoot && 'rounded-sm border-violet-500/25 bg-violet-500/10 text-violet-950 dark:text-violet-100',
             isSelected && 'rounded-sm border-primary/40 bg-primary/30 text-foreground shadow-none',
             !isSelected && !isActiveDocumentRoot && 'hover:bg-primary/20',
@@ -461,7 +479,7 @@ function canHostChildren(): boolean {
                   isActiveDocumentRoot && 'font-semibold text-violet-900 hover:text-violet-950 dark:text-violet-200 dark:hover:text-violet-100',
                   isSelected && 'font-medium',
                 )"
-                @dblclick.stop="startRename"
+                @dblclick.stop="handleLabelDoubleClick"
               >
                 {{ row.label }}
               </span>
@@ -511,70 +529,6 @@ function canHostChildren(): boolean {
           </TooltipContent>
         </Tooltip>
 
-        <Tooltip v-if="row.hasMotion">
-          <TooltipTrigger as-child>
-            <button
-              type="button"
-              data-layer-no-drag
-              :disabled="row.contextOnly"
-              class="mr-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-primary transition-colors hover:bg-primary/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:pointer-events-none"
-              :aria-label="`Motion applied to ${row.label}`"
-              @click.stop="emit('select', row); emit('menu-action', 'inspect-motion', row)"
-            >
-              <AppIcon name="lightning" :size="12" aria-hidden="true" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">Motion enabled</TooltipContent>
-        </Tooltip>
-
-        <Tooltip v-if="row.translationBinding">
-          <TooltipTrigger as-child>
-            <button
-              type="button"
-              data-layer-no-drag
-              :disabled="row.contextOnly"
-              class="mr-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-primary transition-colors hover:bg-primary/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:pointer-events-none"
-              :aria-label="`Translation ${row.translationBinding.namespace}.${row.translationBinding.keyPath.join('.')} applied to ${row.label}`"
-              @click.stop="emit('select', row); emit('menu-action', 'inspect-cms', row)"
-            >
-              <AppIcon name="globe" :size="12" aria-hidden="true" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">Project translation · {{ row.translationBinding.namespace }}.{{ row.translationBinding.keyPath.join('.') }}</TooltipContent>
-        </Tooltip>
-
-        <Tooltip v-if="row.hasCmsBinding">
-          <TooltipTrigger as-child>
-            <button
-              type="button"
-              data-layer-no-drag
-              :disabled="row.contextOnly"
-              class="mr-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-[#f97316] transition-colors hover:bg-[#f97316]/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-[#f97316] disabled:pointer-events-none"
-              :aria-label="`${cmsLabel} applied to ${row.label}`"
-              @click.stop="emit('select', row); emit('menu-action', 'inspect-cms', row)"
-            >
-              <AppIcon name="inspectorTabProps" :size="12" aria-hidden="true" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">{{ cmsLabel }}</TooltipContent>
-        </Tooltip>
-
-        <Tooltip v-else-if="row.hasDataBinding">
-          <TooltipTrigger as-child>
-            <button
-              type="button"
-              data-layer-no-drag
-              :disabled="row.contextOnly"
-              class="mr-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:pointer-events-none"
-              :aria-label="`Project data applied to ${row.label}`"
-              @click.stop="emit('select', row); emit('menu-action', 'inspect-cms', row)"
-            >
-              <AppIcon name="databaseLine" :size="12" aria-hidden="true" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">Project data</TooltipContent>
-        </Tooltip>
-
         <Tooltip v-if="row.isDocumentShell">
           <TooltipTrigger as-child>
             <span class="mr-1.5 flex size-5 items-center justify-center text-muted-foreground opacity-0 transition-opacity duration-100 group-hover/layer:opacity-100">
@@ -583,6 +537,78 @@ function canHostChildren(): boolean {
           </TooltipTrigger>
           <TooltipContent side="right">Document shell node</TooltipContent>
         </Tooltip>
+
+        <div
+          v-if="hasLayerActions"
+          data-layer-actions
+          data-layer-no-drag
+          class="layer-action-rail ms-auto flex shrink-0 items-center ps-2"
+        >
+          <Tooltip v-if="row.hasMotion">
+            <TooltipTrigger as-child>
+              <button
+                type="button"
+                data-layer-no-drag
+                :disabled="row.contextOnly"
+                class="me-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-primary transition-colors hover:bg-primary/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:pointer-events-none"
+                :aria-label="`Motion applied to ${row.label}`"
+                @click.stop="emit('select', row, $event); emit('menu-action', 'inspect-motion', row)"
+              >
+                <AppIcon name="lightning" :size="12" aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Motion enabled</TooltipContent>
+          </Tooltip>
+
+          <Tooltip v-if="row.translationBinding">
+            <TooltipTrigger as-child>
+              <button
+                type="button"
+                data-layer-no-drag
+                :disabled="row.contextOnly"
+                class="me-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-primary transition-colors hover:bg-primary/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:pointer-events-none"
+                :aria-label="`Translation ${row.translationBinding.namespace}.${row.translationBinding.keyPath.join('.')} applied to ${row.label}`"
+                @click.stop="emit('select', row, $event); emit('menu-action', 'inspect-cms', row)"
+              >
+                <AppIcon name="globe" :size="12" aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Project translation · {{ row.translationBinding.namespace }}.{{ row.translationBinding.keyPath.join('.') }}</TooltipContent>
+          </Tooltip>
+
+          <Tooltip v-if="row.hasCmsBinding">
+            <TooltipTrigger as-child>
+              <button
+                type="button"
+                data-layer-no-drag
+                :disabled="row.contextOnly"
+                class="me-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-[#f97316] transition-colors hover:bg-[#f97316]/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-[#f97316] disabled:pointer-events-none"
+                :aria-label="`${cmsLabel} applied to ${row.label}`"
+                @click.stop="emit('select', row, $event); emit('menu-action', 'inspect-cms', row)"
+              >
+                <AppIcon name="inspectorTabProps" :size="12" aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">{{ cmsLabel }}</TooltipContent>
+          </Tooltip>
+
+          <Tooltip v-else-if="row.hasDataBinding">
+            <TooltipTrigger as-child>
+              <button
+                type="button"
+                data-layer-no-drag
+                :disabled="row.contextOnly"
+                class="me-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:pointer-events-none"
+                :aria-label="`Project data applied to ${row.label}`"
+                @click.stop="emit('select', row, $event); emit('menu-action', 'inspect-cms', row)"
+              >
+                <AppIcon name="databaseLine" :size="12" aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Project data</TooltipContent>
+          </Tooltip>
+        </div>
+
       </div>
     </AppContextMenu>
 
@@ -654,3 +680,54 @@ function canHostChildren(): boolean {
     </draggable>
   </div>
 </template>
+
+<style scoped>
+.layer-row {
+  --layer-action-fill: var(--background);
+}
+
+.layer-row:hover,
+.layer-row[data-layer-canvas-hovered="true"] {
+  --layer-action-fill: color-mix(in srgb, var(--primary) 20%, var(--background));
+}
+
+.layer-row[data-layer-drop-inside="true"] {
+  --layer-action-fill: color-mix(in srgb, var(--primary) 12%, var(--background));
+}
+
+.layer-row[data-layer-active-document-root="true"] {
+  --layer-action-fill: color-mix(in srgb, var(--color-violet-500) 10%, var(--background));
+}
+
+.layer-row[data-layer-active-document-root="true"]:hover {
+  --layer-action-fill: color-mix(in srgb, var(--color-violet-500) 15%, var(--background));
+}
+
+.layer-row[data-layer-selected="true"],
+.layer-row[data-layer-selected="true"]:hover {
+  --layer-action-fill: color-mix(in srgb, var(--primary) 30%, var(--background));
+}
+
+.layer-action-rail {
+  position: sticky;
+  z-index: 2;
+  inset-inline-end: 0;
+  background-color: var(--layer-action-fill);
+  transition-duration: 150ms;
+  transition-property: background-color;
+}
+
+.layer-action-rail::before {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 100%;
+  inline-size: 0.75rem;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--layer-action-fill));
+}
+
+.layer-action-rail:dir(rtl)::before {
+  background: linear-gradient(to left, transparent, var(--layer-action-fill));
+}
+</style>

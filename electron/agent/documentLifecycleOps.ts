@@ -13,6 +13,7 @@ import {
   renameComposerPageSlotAssignments,
 } from "../../shared/composer/layoutAuthoring";
 import type { AstroDocumentModel } from "../../shared/composer/types";
+import { patchComposerModelSource } from "../../shared/composer/sourcePatches";
 import { commitComposerEditTransaction } from "../composer/transaction";
 import { parseComposerPage, resolveComposerPageFile } from "../composer/parsePage";
 import { canonicalDirectory, resolveWithinRoot, writeTextFileAtomic } from "../pathSafety";
@@ -210,6 +211,7 @@ export async function updateLayoutSlots(input: {
     };
   }
 
+  const beforeModel = structuredClone(parsed.model) as AstroDocumentModel;
   const model = parsed.model as AstroDocumentModel;
   let selectPath: string | null | undefined;
   let renamedAssignments: number | undefined;
@@ -304,13 +306,22 @@ export async function updateLayoutSlots(input: {
     );
   }
 
+  const patched = patchComposerModelSource(parsed.source, beforeModel, model);
+  if (!patched.ok) {
+    return {
+      ok: false,
+      code: "INVALID_INPUT",
+      message: patched.reason,
+    };
+  }
   const committed = commitComposerEditTransaction({
     projectPath: input.projectPath,
-    page: {
+    sources: [{
       relativeFile: input.file,
-      model,
+      source: patched.source,
+      expectedSource: parsed.source,
       expectedMtimeMs: input.expectedMtimeMs,
-    },
+    }],
   });
   if (!committed.ok) {
     return {

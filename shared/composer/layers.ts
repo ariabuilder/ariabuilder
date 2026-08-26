@@ -1,6 +1,6 @@
 import { VOID_TAGS } from "./elementSchemas";
 import { ARIA_LAYER_LABEL_ATTR } from "./constants";
-import type { StructureKind } from "./paths";
+import { nodeAtMarkerPath, type StructureKind } from "./paths";
 import type { AstroCollectionBinding, AstroDocumentModel, EditableNode, ElementNode } from "./types";
 import {
   astroCollectionBindingForNode,
@@ -27,6 +27,7 @@ import {
   isComposerVisualElement,
 } from "./richText";
 import { detectTranslationContexts } from "./translationBindings";
+import { resolveComposerTextTargetPath } from "./cmsBindings";
 
 export type ComposerLayerRegion = "content" | "document";
 
@@ -459,6 +460,7 @@ function canNodeAcceptChildren(node: EditableNode): boolean {
 }
 
 type BuildRowOptions = {
+  model?: AstroDocumentModel;
   omitBodyChildren?: boolean;
   collectionBindings?: AstroCollectionBindingMap;
   conditionContext?: ConditionEvaluationContext;
@@ -534,15 +536,28 @@ function propsForIndicators(node: EditableNode) {
 function directCmsBinding(
   node: EditableNode,
   bindings: AstroCollectionBindingMap,
+  model?: AstroDocumentModel,
+  path?: string,
 ): AstroCollectionBinding | null {
-  const native = astroCollectionBindingForNode(node, bindings);
-  const hasFallback = node.kind === "expr" && node.value.includes("@aria-cms-fallback") ||
-    Boolean(propsForIndicators(node) && Object.values(propsForIndicators(node)!).some(
+  const textTargetPath = model && path
+    ? resolveComposerTextTargetPath(model, path)
+    : null;
+  const textTarget = textTargetPath && model
+    ? nodeAtMarkerPath(model.nodes, textTargetPath)
+    : null;
+  const candidates = textTarget && textTarget !== node ? [node, textTarget] : [node];
+  const native = mergeAstroCollectionBindings(
+    candidates.map((candidate) => astroCollectionBindingForNode(candidate, bindings)),
+  );
+  const hasFallback = candidates.some((candidate) =>
+    candidate.kind === "expr" && candidate.value.includes("@aria-cms-fallback") ||
+    Boolean(propsForIndicators(candidate) && Object.values(propsForIndicators(candidate)!).some(
       (prop) => prop.type === "expr" && prop.value.includes("@aria-cms-fallback"),
     )) ||
-    Boolean(node.kind === "element" && Array.isArray(node.children) && node.children.some(
+    Boolean(candidate.kind === "element" && Array.isArray(candidate.children) && candidate.children.some(
       (child) => child.kind === "expr" && child.value.includes("@aria-cms-fallback"),
-    ));
+    )),
+  );
   return mergeAstroCollectionBindings([
     native,
     hasFallback ? { collections: [], cardinality: "unknown", dynamic: true } : null,
@@ -580,7 +595,7 @@ function cmsSemanticLabel(
   node: EditableNode,
   binding: AstroCollectionBinding | null,
 ): string | null {
-  if (!binding) return null;
+  if (!binding || node.kind === "element") return null;
   const collection = binding.collections[0]
     ? titleCase(binding.collections[0])
     : null;
@@ -601,7 +616,14 @@ function buildRow(
     region === "document" &&
     (node.kind === "doctype" || Boolean(tag && SHELL_TAGS.has(tag)));
   const sourceLabel = sourceLabelFor(node);
-  const richTextPreview = isComposerRichTextHost(node)
+  const bindings = options.collectionBindings ?? {};
+  const cmsBinding = directCmsBinding(
+    node,
+    bindings,
+    options.model,
+    path,
+  );
+  const richTextPreview = isComposerRichTextHost(node) && !(cmsBinding && node.kind === "element")
     ? composerRichTextPlainText(node)
     : "";
   const baseLabel = isComposerRichTextBlock(node)
@@ -614,8 +636,6 @@ function buildRow(
     : undefined;
   const foldRichTextChildren = shouldFoldTextChildren(node);
   const omitAllChildren = options?.omitBodyChildren === true && tag === "body";
-  const bindings = options.collectionBindings ?? {};
-  const cmsBinding = directCmsBinding(node, bindings);
   const translationBinding = translationField(node, options.translationContexts);
   const label = customLayerLabel(node) ?? (
     translationBinding
@@ -1020,6 +1040,7 @@ export function buildComposerLayerTree(
   },
 ): ComposerLayerTreeProjection {
   const rowOptions: BuildRowOptions = {
+    model,
     collectionBindings: {
       ...cmsQueryBindings(model.extraFrontmatter),
       ...(model.collectionBindings ?? {}),
