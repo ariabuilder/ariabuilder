@@ -166,7 +166,6 @@ describe("clean page thumbnail capture", () => {
     expect(win.loadedUrl).toBe("http://127.0.0.1:4321/about");
     expect(win.webContents.capturePage).toHaveBeenCalledWith(
       { x: 0, y: 0, width: 768, height: 576 },
-      { stayHidden: true },
     );
     const readyScript = win.webContents.executeJavaScript.mock.calls[0]![0];
     expect(readyScript).toContain("vite-error-overlay");
