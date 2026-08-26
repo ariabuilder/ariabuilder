@@ -22,6 +22,12 @@ jobs:
       actions: read
       contents: write
     steps:
+      - name: Checkout preview source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
       - name: Download macOS Apple Silicon build
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -85,6 +91,7 @@ jobs:
           PREVIEW_COMMIT: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
+          preview_version="$(node -p "require('./package.json').version")"
           release_notes="Unsigned preview built from ${PREVIEW_COMMIT}. These builds are for testing and may trigger operating-system security warnings."
 
           if gh release view preview >/dev/null 2>&1; then
@@ -94,13 +101,13 @@ jobs:
               -F force=true
             gh release upload preview preview-assets/* --clobber
             gh release edit preview \
-              --title "Aria unsigned preview" \
+              --title "Aria ${preview_version} unsigned preview" \
               --notes "${release_notes}" \
               --prerelease
           else
             gh release create preview \
               --target "${PREVIEW_COMMIT}" \
-              --title "Aria unsigned preview" \
+              --title "Aria ${preview_version} unsigned preview" \
               --notes "${release_notes}" \
               --prerelease \
               preview-assets/*
