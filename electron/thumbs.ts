@@ -768,10 +768,12 @@ export async function captureThumbs(
       throw new Error("Capture superseded");
     }
 
-    const image = await win.webContents.capturePage(
-      { x: 0, y: 0, width: viewport.width, height: captureHeight },
-      { stayHidden: true },
-    );
+    const image = await win.webContents.capturePage({
+      x: 0,
+      y: 0,
+      width: viewport.width,
+      height: captureHeight,
+    });
     if (!activeCaptureIsCurrent(projectPath, job)) {
       throw new Error("Capture superseded");
     }
